@@ -25,3 +25,9 @@ Electron smoke checks verify actual window growth, shrink after a long answer, n
 The installed UI was left open in compact mode with a prepared example, sound stopped and click-through disabled. The click-through state toggled through the UI; synthetic Cmd+Shift+M input did not visibly toggle it in CUA, so a real keyboard check remains necessary.
 
 Content protection remains best-effort on macOS; this change does not establish universal invisibility in Zoom, Chrome, Meet or Teams.
+
+## 0.4.1: repeated demo question
+
+The installed UI showed a successful manual streaming request whose question matched the demo, while the audio transcript and history contained other recognized questions. The demo had populated the composer, which audio recognition never updated. Fixed the demo to render only an example, connected newly recognized questions to the composer, preserved unsent manual edits with an explicit use-recognized action, and cleared a submitted draft only if it was unchanged during the request. Starting a real audio session resumes following fresh answers. The compact panel now shows the latest heard phrase.
+
+The Electron regression test submits three distinct recognized questions through the real IPC/provider path with a mocked API, asserts that each outgoing question produces its own response, verifies that the demo leaves the composer empty, checks that submitted drafts clear, and tests manual-draft preservation and explicit replacement. This does not constitute a new live Gemini speech test. The installed app was rebuilt as 0.4.1, its local signature verified, its screen/audio grant renewed for the changed development signature, and its blank composer and version verified in the actual UI.

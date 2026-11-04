@@ -1,7 +1,7 @@
 module.exports = async (url, options) => {
   if (!url.startsWith('https://generativelanguage.googleapis.com/v1beta/interactions') || options.headers['x-goog-api-key'] !== 'smoke-test-not-a-real-key') throw Error('Wrong provider routing');
   const body = JSON.parse(options.body);
-  let answer = 'Gemini smoke response';
+  let answer = 'Gemini smoke response' + (typeof body.input === 'string' ? ': ' + body.input.split('Вопрос:\n').at(-1) : '');
   if (body.response_format) answer = JSON.stringify({ transcript: 'What is an index?', question: 'What is an index?', answer: 'An index speeds up reads.' });
   if (body.stream) {
     const events = [

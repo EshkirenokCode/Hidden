@@ -5,12 +5,27 @@ module.exports = async ({ app, win, toggleWindow }) => {
       await waitFor(() => window.ghostSession);
       document.querySelector('#demo').click();
       if (!document.querySelector('#answer').textContent.includes('Демонстрация')) throw Error('Demo failed');
+      if (document.querySelector('#question').value) throw Error('Demo polluted the question input');
       document.querySelector('#settings-open').click();
       if (!document.querySelector('#settings').open) throw Error('Settings failed');
       document.querySelector('#api-key').value = 'smoke-test-not-a-real-key';
       document.querySelector('#settings-form').requestSubmit();
       await waitFor(() => !document.querySelector('#settings').open);
       if (await window.ghost.keyStatus('openai')) throw Error('Key separation failed');
+      for (const question of ['Что такое DNS?', 'Чем отличается TCP от UDP?', 'Что такое индекс базы данных?']) {
+        window.copilot.receiveQuestion(question);
+        if(document.querySelector('#question').value !== question) throw Error('Recognized question did not replace stale audio question');
+        document.querySelector('#question-form').requestSubmit();
+        await waitFor(() => !document.querySelector('#submit').disabled);
+        if(!document.querySelector('#answer').textContent.includes(question)) throw Error('Sent a stale question instead of: '+question);
+        if(document.querySelector('#question').value) throw Error('Sent question stayed in composer');
+      }
+      document.querySelector('#question').value = 'Manual draft';
+      document.querySelector('#question').dispatchEvent(new Event('input'));
+      window.copilot.receiveQuestion('Новый вопрос из речи');
+      if(document.querySelector('#question').value !== 'Manual draft' || document.querySelector('#use-heard').hidden) throw Error('Manual draft overwritten');
+      document.querySelector('#use-heard').click();
+      if(document.querySelector('#question').value !== 'Новый вопрос из речи') throw Error('Use recognized question failed');
       document.querySelector('#question-form').requestSubmit();
       await waitFor(() => document.querySelector('#answer').textContent.includes('Gemini smoke response'));
       await waitFor(() => !document.querySelector('#submit').disabled);

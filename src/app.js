@@ -7,6 +7,25 @@ if (!Array.isArray(history)) history = [];
 history = history.filter(x => typeof x?.question === 'string' && typeof x?.answer === 'string').slice(0, 30);
 let currentAnswer = '', busy = false, pinned = false, streamingText = '', pendingImage = null;
 let selectedEntry = null, readingHistory = false, unread = 0;
+let syncedQuestion = '', heardQuestion = '';
+function receiveQuestion(question) {
+  heardQuestion = question;
+  const field = $('#question');
+  if (!field.value.trim() || field.value === syncedQuestion) {
+    field.value = question; syncedQuestion = question;
+    $('#question-origin').textContent = 'Распознанный вопрос';
+    $('#use-heard').hidden = true;
+  } else {
+    $('#question-origin').textContent = 'Ваш текст · распознан новый вопрос';
+    $('#use-heard').hidden = false;
+  }
+}
+$('#question').addEventListener('input', () => {
+  $('#question-origin').textContent = $('#question').value.trim() ? 'Ваш текст' : 'Введите вопрос или начните слушать';
+  $('#use-heard').hidden = !heardQuestion || $('#question').value === heardQuestion;
+});
+$('#use-heard').onclick = () => { $('#question').value = ''; receiveQuestion(heardQuestion); };
+function followLive() { readingHistory = false; unread = 0; navigation(); }
 let fitTimer;
 function scheduleFit() {
   if (fitTimer || !document.body.classList.contains('compact')) return;
@@ -133,12 +152,14 @@ async function compact(enabled) { const active = await window.ghost.compact(enab
 $('#compact').onclick = () => compact(!document.body.classList.contains('compact'));
 $('#clear').onclick = () => { history = []; selectedEntry = null; readingHistory = false; unread = 0; save('ghost.history', history); renderHistory(); };
 $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(currentAnswer); $('#copy').textContent = 'Скопировано'; setTimeout(() => { $('#copy').textContent = 'Копировать'; }, 1500); } catch { showError('Не удалось скопировать.'); } };
-$('#demo').onclick = () => { $('#question').value = 'Чем отличаются optimistic и pessimistic locking?'; showAnswer('Демонстрация · подготовленный пример\n\nOptimistic locking проверяет версию записи при обновлении. Если версия изменилась, операция повторяется или возвращает конфликт.\n\nPessimistic locking блокирует запись на время транзакции. Другие операции ждут. Подходит при частых конфликтах, но требует коротких транзакций и контроля deadlock.'); };
+$('#demo').onclick = () => { $('#answer-question').textContent = 'Пример ответа · не отправляется в API'; showAnswer('Демонстрация · подготовленный пример\n\nOptimistic locking проверяет версию записи при обновлении. Если версия изменилась, операция повторяется или возвращает конфликт.\n\nPessimistic locking блокирует запись на время транзакции. Другие операции ждут. Подходит при частых конфликтах, но требует коротких транзакций и контроля deadlock.'); };
 window.ghost.onDelta(({ text }) => { if (!busy) return; streamingText += text; showAnswer(streamingText, true); $('#timing').textContent = 'Генерация…'; });
 $('#cancel-answer').onclick = () => window.ghost.cancel();
 $('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
 async function ask(question) {
-  if (busy || (!question.trim() && !pendingImage)) return;
+  if (busy) return;
+  if (!question.trim() && !pendingImage) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }
+  const submittedDraft = $('#question').value;
   busy = true; streamingText = ''; $('#submit').disabled = true; $('#cancel-answer').hidden = false; $('.answer-card').setAttribute('aria-busy', 'true'); showError('');
   navigation();
   try {
@@ -149,11 +170,16 @@ async function ask(question) {
     const result = await window.ghost.generate({ ...request, question, ...(pendingImage ? { image: pendingImage } : {}) });
     if (result.error) throw Error(result.error);
     presentResult(result, question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
+    if ($('#question').value === submittedDraft && submittedDraft.trim() === question) {
+      $('#question').value = ''; syncedQuestion = '';
+      $('#question-origin').textContent = 'Введите следующий вопрос или продолжайте говорить';
+      $('#use-heard').hidden = true;
+    }
   } catch (error) { showError(error.message); }
   finally { busy = false; $('#submit').disabled = false; $('#cancel-answer').hidden = true; $('.answer-card').setAttribute('aria-busy', 'false'); navigation(); }
 }
 $('#question-form').onsubmit = event => { event.preventDefault(); ask($('#question').value); };
 $('#question').onkeydown = event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $('#question-form').requestSubmit(); } };
 $('#import-context').onclick = async () => { try { const result = await window.ghost.importContext(); if (result.error) throw Error(result.error); if (result.text !== undefined) { $('#context').value = result.text; $('#context').dispatchEvent(new Event('input')); } } catch (error) { showError(error.message); } };
-window.copilot = { config, presentResult, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
+window.copilot = { config, presentResult, receiveQuestion, followLive, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
 renderHistory(); updateStatus(); updatePrivacy();

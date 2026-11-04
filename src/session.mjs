@@ -28,7 +28,7 @@ const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
 function conversation() { return transcript.map(x => `${x.text}${x.question ? `\nВопрос: ${x.question}` : ''}${x.answer ? `\nУже дан ответ: ${x.answer}` : ''}`).join('\n').slice(-12000); }
 function appendTranscript(item) {
-  if (item.question) lastQuestion = item.question;
+  if (item.question) { lastQuestion = item.question; ui.receiveQuestion(item.question); }
   if (!item.transcript) return;
   transcript.push({ text: item.transcript, question: item.question, answer: item.answer }); transcript = transcript.slice(-40);
   const row = document.createElement('div'); row.className = 'transcript-row';
@@ -47,6 +47,7 @@ async function drain() {
       if (id !== epoch || !running) continue;
       if (result.error) { ui.showError(result.error); await stop(); return; }
       appendTranscript(result);
+      if (result.transcript) { $('#heard-speech').hidden = false; $('#heard-speech').textContent = `Услышано: ${result.transcript}`; }
       if (result.question && result.answer) ui.presentResult({ ...result, model: cfg.model }, result.question, true);
       status(result.question ? `Вопрос распознан · ${(result.elapsedMs / 1000).toFixed(2)} с` : 'Слушаем · вопрос пока не определён');
     }
@@ -119,6 +120,7 @@ async function start(testOnly = false) {
     await audioContext.resume();
     }
     running = true; monitorOnly = testOnly; started = Date.now();
+    if (!testOnly) { ui.followLive(); $('#heard-speech').hidden = false; $('#heard-speech').textContent = 'Слушаем · ожидаем новую фразу'; }
     timer = setInterval(() => { const sec = Math.floor((Date.now() - started) / 1000); $('#session-time').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }, 1000);
     $('#stop-session').disabled = false; $('#flush-audio').disabled = testOnly; $('#audio-source').disabled = true; sourceButtons(); $('#check-sound').disabled = true; $('#live-dot').classList.add('listening');
     status(testOnly ? 'Проверка звука: только индикатор, без отправки аудио в API. Включите звук и проверьте уровень.' : kind === 'system' ? 'Слушаем системный звук · проверьте индикатор уровня' : 'Слушаем микрофон · после паузы фраза уйдёт в Gemini');
