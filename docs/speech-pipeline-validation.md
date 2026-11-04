@@ -28,7 +28,27 @@ The actual Electron smoke test passed with a fake Chromium microphone, synthetic
 - supersession of a still-running answer, emergency stop during a request, and key deletion stopping a session;
 - existing isolation, draft/history handling, image input, transparent adaptive overlay and control checks.
 
-No real API latency or speech accuracy is established by those tests. Gemini Transcribe Live availability and quota must be tested with the user's key; the development environment has no GEMINI_API_KEY. No historical chat key is reused. Live traffic may incur different costs/quotas from the existing text model.
+No real API latency or speech accuracy is established by the mocked tests. Initial development had no GEMINI_API_KEY; no historical chat key was reused. Subsequent real acceptance used the key entered by the user in the installed app, without reading or exporting it. Live traffic may incur different costs/quotas from the existing text model.
+
+## Real installed-app acceptance, 4 November 2026
+
+The user renewed the existing macOS screen/system-audio permission and entered a key in Hidden 0.5. The audio-only local monitor received an OS test sound. The Live availability probe succeeded in 2.08 seconds without sending audio.
+
+Russian synthetic questions were generated locally with the installed Milena TTS voice, played through afplay, captured by the real ScreenCaptureKit helper, streamed to the actual Transcribe Live service and answered by the actual `gemini-3.5-flash-lite` endpoint. These were not mocked API requests. No background speech appeared in the observed transcripts.
+
+The initial Go transcription was correct (“Golang”) and arrived approximately 1.49 seconds after the locally detected end of speech, but the text model exceeded the eight-second first-text deadline. A subsequent explicit manual request for the same question took 11.72 seconds to first text and 12.48 seconds to complete. The reason for this outlier is not established; it must not be presented as proven server cold-start behavior.
+
+The next voice questions completed successfully:
+
+| Question | Final transcript after speech | First answer text after speech | Complete answer after speech |
+| --- | ---: | ---: | ---: |
+| What is DNS and what is it for? (Russian) | 1.01 s | 2.27 s | 2.93 s |
+| TCP versus UDP (Russian) | 1.15 s | 2.82 s | 3.34 s |
+| Features of Golang, repeated (Russian) | 1.97 s | 3.34 s | 4.47 s |
+
+All three transcripts matched the intended questions and produced relevant technical answers. The Go question was recognized directly as Golang; the local typo replacement was not needed in these real samples. The earlier refusal based on absent resume context did not recur. The first-response latency from the text API itself was 1.25, 1.67 and 1.37 seconds respectively on those successful voice turns.
+
+These are three clear synthetic-speech samples on one machine and connection, not a latency distribution, a human-microphone accuracy benchmark or proof of reliable performance under noise. The initial timeout remains a material limitation. Capture was stopped after testing, Stop became disabled, and no native audio helper process remained. The app and in-memory key were left available; no key was logged or committed.
 
 ## Sources
 
