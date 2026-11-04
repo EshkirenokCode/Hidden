@@ -7,6 +7,7 @@ let transcript = [], lastQuestion = '', selectedScreen = null;
 let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, lastVoiceAt = 0;
 let turns = new QuestionTurns(), sessionConfig, sessionVocabulary = [];
 let latestMetrics = null;
+let inFlightQuestion = '';
 const storedSource = localStorage.getItem('hidden.audioSource');
 if (storedSource === 'system') $('#audio-source').value = 'system';
 function sourceButtons() { for (const name of ['microphone','system']) { $('#source-' + name).setAttribute('aria-pressed', String($('#audio-source').value === name)); $('#source-' + name).disabled = $('#audio-source').disabled; } }
@@ -51,45 +52,50 @@ function metrics(values) {
   $('#speech-metrics').textContent = [latestMetrics.mode,
     latestMetrics.transcriptionMs != null ? 'распознавание после речи ' + sec(latestMetrics.transcriptionMs) : '',
     latestMetrics.firstWordsMs != null ? 'первые слова после речи ' + sec(latestMetrics.firstWordsMs) : '',
-    latestMetrics.totalMs != null ? 'весь ответ ' + sec(latestMetrics.totalMs) : ''
+    latestMetrics.totalMs != null ? 'весь ответ ' + sec(latestMetrics.totalMs) : '',
+    latestMetrics.waiting ? 'Gemini отвечает медленно · запрос продолжается' : ''
   ].filter(Boolean).join(' · ');
 }
-async function acceptTranscript(raw, endedAt, transcriptionMs) {
+export async function acceptTranscript(raw, endedAt, transcriptionMs) {
   if (!running || monitorOnly || !raw.trim()) return;
   const result = turns.accept(raw);
   heard(result.text);
+  const questionKey = (result.question || result.text).toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  if (questionKey && questionKey === inFlightQuestion) { status('Этот вопрос уже обрабатывается · ожидаем ответ Gemini'); return; }
   const entry = appendTranscript({ transcript: raw, question: result.question, answer: '' });
   if (result.corrections.length) {
     $('#speech-correction').hidden = false;
     $('#speech-correction').textContent = 'Понял как: ' + result.text + ' · ' + result.corrections.join(', ');
   } else $('#speech-correction').hidden = true;
   if (!result.question) { status('Фраза услышана · ожидаем вопрос или его продолжение'); return; }
-  metrics({ mode: live ? 'Live' : 'По фразам', transcriptionMs, firstWordsMs: null, totalMs: null });
+  metrics({ mode: live ? 'Live' : 'По фразам', transcriptionMs, firstWordsMs: null, totalMs: null, waiting: false });
   status('Вопрос понят · готовим ответ');
   if (!$('#auto-answer').checked) { status('Вопрос распознан · автоответ выключен'); return; }
   voiceBeganAt = endedAt;
   const id = ++voiceId, sessionId = epoch;
+  inFlightQuestion = questionKey;
   ui.beginSpeechAnswer(id, result.question);
   const slow = setTimeout(() => { if (id === voiceId && running && latestMetrics?.firstWordsMs == null) status('Gemini задерживается · ответ появится по мере получения'); }, 5000);
   try {
     const answer = await window.ghost.speechAnswer({ ...ui.config(), id, question: result.question });
     if (id !== voiceId || sessionId !== epoch || !running) return;
-    if (answer.error) { ui.endSpeechAnswer(id); ui.showError(answer.error); status('Ответ не получен · можно повторить последний вопрос'); return; }
+    if (answer.error) { metrics({ waiting: false }); ui.endSpeechAnswer(id, true); ui.showError(answer.error); status(answer.partialAnswer ? 'Получена часть ответа · можно повторить вопрос' : 'Ответ не получен · вопрос сохранён для повтора'); return; }
     entry.answer = answer.answer;
     metrics({ totalMs: performance.now() - endedAt });
     ui.endSpeechAnswer(id);
     ui.presentResult(answer, result.question, true);
     status('Ответ готов · продолжаем слушать');
   } catch { if (id === voiceId && sessionId === epoch) { ui.endSpeechAnswer(id); ui.showError('Не удалось получить голосовой ответ. Повторите вопрос.'); } }
-  finally { clearTimeout(slow); }
+  finally { clearTimeout(slow); if (id === voiceId) inFlightQuestion = ''; }
 }
 let voiceBeganAt = 0;
 window.ghost.onSpeechDelta(packet => {
   if (!running || packet.id !== voiceId) return;
   ui.speechDelta(packet.id, packet.text);
-  if (latestMetrics?.firstWordsMs == null) metrics({ firstWordsMs: performance.now() - voiceBeganAt });
+  if (latestMetrics?.firstWordsMs == null) metrics({ firstWordsMs: performance.now() - voiceBeganAt, waiting: false });
   status('Ответ поступает · продолжаем слушать');
 });
+window.ghost.onSpeechNotice(packet => { if (running && packet.id === voiceId) { status(packet.message); metrics({ waiting: true }); } });
 window.ghost.onLiveSpeech(event => {
   if (!running || !live || event.sessionId !== epoch) return;
   if (event.type === 'interim') heard(event.text, true);
@@ -220,7 +226,7 @@ async function start(testOnly = false) {
   finally { starting = false; $('#start-session').disabled = running; if (!running) { stream?.getTracks().forEach(t => t.stop()); if (audioContext && audioContext.state !== 'closed') await audioContext.close(); await window.ghost.armMedia(false); } }
 }
 async function stop() {
-  running = false; epoch++; voiceId++; ui.endSpeechAnswer(); live = false; pcmPackets = null; frameRate = 0; queue = []; clearInterval(timer);
+  running = false; epoch++; voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); live = false; pcmPackets = null; frameRate = 0; queue = []; clearInterval(timer);
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); }); stream = null;
   if (worklet) { worklet.port.onmessage = null; worklet.disconnect(); } input?.disconnect();
   if (audioContext && audioContext.state !== 'closed') await audioContext.close();
@@ -247,5 +253,7 @@ $('#compact-snapshot').onclick = () => snapshot(true);
 $('#answer-last').onclick = () => lastQuestion ? ui.ask(lastQuestion) : ui.showError('Вопрос ещё не распознан. Начните сессию или введите вопрос.');
 $('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; lastQuestion = ''; $('#transcript').textContent = 'Диалог очищен.'; };
 window.ghost.onAnswerLast(() => $('#answer-last').click()); window.ghost.onSnapshot(() => snapshot(true));
-window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics };
+window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics,
+  cancelAnswer() { voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); return window.ghost.cancelSpeechAnswer(); }
+};
 window.addEventListener('beforeunload', () => { stream?.getTracks().forEach(t => t.stop()); window.ghost.armMedia(false); });

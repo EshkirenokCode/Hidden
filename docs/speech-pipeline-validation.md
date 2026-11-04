@@ -55,3 +55,24 @@ These are three clear synthetic-speech samples on one machine and connection, no
 [Google Live transcription documentation](https://aistudio.google.com/docs/live-api/live-transcribe) specifies the dedicated model, WebSocket setup, PCM input, interim/final text, vocabulary biasing, language hints and hybrid end-of-stream behavior.
 
 The release is a local ad-hoc macOS build. It is not notarized or signed with a distribution identity; changing the build can require renewing the existing screen/audio permission. Screen-capture invisibility limitations from prior releases remain unchanged.
+
+## 0.5.1: premature voice timeouts
+
+The eight-second first-text limit introduced in 0.5 was too aggressive: the real acceptance run had already observed 11.72 seconds to first text. It caused usable slow responses to be aborted and was obscured by the generic timeout message. This is an application policy defect; it is not evidence that the upstream provider itself failed the request.
+
+Replaced it with stage-specific budgets: 30 seconds before first text, 20 seconds of inactivity after text starts, and 60 seconds overall. A five-second delay notice is visible in the compact panel without aborting the request. A hard timeout reports its stage. Already received text is synchronously flushed into the UI and remains copyable, including data waiting for the rendering throttle. The recognized question remains available for explicit retry. Automatic retries were not introduced.
+
+An identical question is no longer allowed to restart a still-running answer, even after the short duplicate-detection window expires. Explicit manual retry cancels the outstanding voice request before starting the manual request. New distinct questions and emergency stop still cancel obsolete work.
+
+Regression coverage includes a delayed first token after 12 seconds through the actual Gemini SSE adapter with mocked transport and virtual time, first-token/idle/total deadline attribution, partial-text preservation and explicit cancellation. The Electron smoke test also waits a real 12 seconds before the first mock response, repeats the question after 10.5 seconds, verifies the pending-request indicator and completion without restart, and checks preservation of an unpainted partial delta. These controlled tests establish removal of the false eight-second cutoff, not improved upstream API latency.
+
+All 33 unit tests and the extended Electron smoke test passed. The installed 0.5.1 app passed local signature verification; its existing screen/audio grant was renewed and the user re-entered the key without exposing it to the agent.
+
+Real acceptance then used the same synthetic Russian system-audio path:
+
+| Question | Transcript after speech | First text from the answer API | First text after speech | Complete answer after speech |
+| --- | ---: | ---: | ---: | ---: |
+| Two plus two | 1.02 s | 14.54 s | 15.58 s | 15.58 s |
+| Features of Golang | 1.21 s | 9.12 s | 10.33 s | 10.95 s |
+
+Both questions were recognized correctly and received relevant complete answers without timeout. Both would have exceeded 0.5's eight-second first-text cutoff. This confirms the premature-abort fix against the real API, while also showing that upstream response latency remains poor in this run. No claim of faster model execution is made. Audio capture was stopped after testing; the app remains open in compact mode with the key in memory.

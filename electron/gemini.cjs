@@ -24,7 +24,7 @@ async function call(body, key, fetchImpl = fetch, options = {}) {
       body: JSON.stringify({ store: false, ...body, ...(options.onDelta ? { stream: true } : {}) })
     });
   } catch (error) {
-    if (error.name === 'AbortError' || signal.aborted) throw error;
+    if (error.name === 'AbortError' || error.name === 'TimeoutError' || signal.aborted) throw error;
     throw Error('Не удалось подключиться к Gemini. Проверьте интернет и доступ к API.');
   }
   if (!response.ok) {
@@ -72,10 +72,15 @@ const audioSchema = { type: 'object', properties: { transcript: { type: 'string'
 async function transcribeAudio(request, key, fetchImpl = fetch, options = {}) {
   if (!request || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model || '') || !Array.isArray(request.vocabulary) || request.vocabulary.length > 100 || request.vocabulary.some(x => typeof x !== 'string' || x.length > 80)) throw Error('Некорректные настройки распознавания.');
   const started = performance.now();
-  const text = await call({ model: request.model, input: [
+  let text;
+  try { text = await call({ model: request.model, input: [
     { type: 'text', text: 'Transcribe speech verbatim in its original language (usually Russian with English technical terms). Do not answer it. Prefer these spellings only when acoustically appropriate: ' + request.vocabulary.join(', ') + '. Never invent speech from silence/noise; return exactly [SILENCE] if there is no intelligible speech.' },
     media(request.audio, 'audio')], generation_config: { ...settings(request.model), ...(/^gemini-3\.5-/.test(request.model) ? { temperature: 0 } : {}) }
-  }, key, fetchImpl, { ...options, timeoutMs: 12000 });
+  }, key, fetchImpl, { ...options, timeoutMs: 12000 }); }
+  catch (error) {
+    if (error.name === 'TimeoutError' && !options.signal?.aborted) throw Error('Gemini не распознал аудиофразу за 12 с. Это задержка распознавания, а не генерации ответа. Попробуйте Live или повторите фразу.');
+    throw error;
+  }
   return { transcript: text.trim() === '[SILENCE]' ? '' : text.slice(0, 12000), transcriptionMs: Math.round(performance.now() - started) };
 }
 async function analyzeAudio(request, key, fetchImpl = fetch, options = {}) {

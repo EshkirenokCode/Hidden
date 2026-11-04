@@ -24,10 +24,13 @@ function speechDelta(id, text) {
     $('#timing').textContent = 'Ответ поступает…';
   }, 40);
 }
-function endSpeechAnswer(id) {
+function endSpeechAnswer(id, interrupted = false) {
   if (id !== undefined && speechStream?.id !== id) return;
   clearTimeout(speechPaint); speechPaint = null;
-  if (speechStream && !busy && !readingHistory) $('#timing').textContent = 'Генерация завершена или остановлена';
+  if (speechStream && !busy && !readingHistory) {
+    if (speechStream.text) showAnswer(speechStream.text, true);
+    $('#timing').textContent = interrupted && speechStream.text ? 'Ответ прерван · полученная часть сохранена' : 'Генерация завершена или остановлена';
+  }
   speechStream = null;
 }
 function receiveQuestion(question) {
@@ -200,6 +203,7 @@ async function ask(question) {
   busy = true; streamingText = ''; $('#submit').disabled = true; $('#cancel-answer').hidden = false; $('.answer-card').setAttribute('aria-busy', 'true'); showError('');
   navigation();
   try {
+    await window.ghostSession?.cancelAnswer();
     const request = config();
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
     question = question.trim() || 'Разбери задачу на снимке. Объясни решение и его сложность. Если текст неразборчив, скажи об этом.';

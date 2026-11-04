@@ -3,6 +3,7 @@ const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
 const { LiveTranscriber } = require('./live-transcriber.cjs');
+const { generateVoiceAnswer } = require('./voice-answer.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -191,17 +192,11 @@ app.whenReady().then(() => {
     trusted(event); if (!mediaArmed || !Number.isSafeInteger(request?.id)) return { error: 'Аудиосессия остановлена.' };
     const previous = controllers.get('speech-answer'); previous?.abort(); controllers.delete('speech-answer');
     return runTask('speech-answer', async signal => {
-      const began = performance.now(); let firstTokenMs;
-      const firstWordDeadline = new AbortController();
-      const firstWordTimer = setTimeout(() => firstWordDeadline.abort(new DOMException('Gemini не начал ответ за 8 секунд.', 'TimeoutError')), 8000);
-      try {
-      const answer = await generate({ ...request, provider: 'gemini' }, keys.gemini, fetchImpl, { signal: AbortSignal.any([signal, firstWordDeadline.signal, AbortSignal.timeout(20000)]), onDelta: text => {
-        clearTimeout(firstWordTimer);
-        firstTokenMs ??= Math.round(performance.now() - began);
+      return generateVoiceAnswer(request, keys.gemini, fetchImpl, { signal, onDelta: (text, firstTokenMs) => {
         if (!signal.aborted && mediaArmed && !event.sender.isDestroyed()) event.sender.send('speech:delta', { id: request.id, text, firstTokenMs });
+      }, onNotice: message => {
+        if (!signal.aborted && mediaArmed && !event.sender.isDestroyed()) event.sender.send('speech:notice', { id: request.id, message });
       } });
-      return { answer, firstTokenMs, model: request.model };
-      } finally { clearTimeout(firstWordTimer); }
     });
   });
   ipcMain.handle('media:diagnostics', event => {

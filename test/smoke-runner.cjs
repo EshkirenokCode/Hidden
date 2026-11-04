@@ -116,6 +116,18 @@ module.exports = async ({ app, win, toggleWindow }) => {
       if(!document.querySelector('#speech-correction').textContent.includes('Go (Golang)')) throw Error('Term correction not disclosed');
       await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
       if(!window.ghostSession.conversation().includes('Gemini smoke response')) throw Error('Audio answer missing from conversation');
+      const {acceptTranscript}=await import('./session.mjs');
+      const delayedAnswer=acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
+      await new Promise(r=>setTimeout(r,10500));
+      if(!window.ghostSession.metrics().waiting || !document.querySelector('#speech-metrics').textContent.includes('запрос продолжается')) throw Error('Slow request not shown in the compact-visible status');
+      await acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
+      if(!document.querySelector('#session-status').textContent.includes('уже обрабатывается')) throw Error('In-flight repeated question restarted');
+      await delayedAnswer;
+      if(!document.querySelector('#answer').textContent.includes('DELAYED_TEST') || window.ghostSession.metrics().totalMs == null) throw Error('12-second delayed voice answer was lost');
+      window.copilot.beginSpeechAnswer(99999,'Partial question');
+      window.copilot.speechDelta(99999,'Preserved partial text');
+      window.copilot.endSpeechAnswer(99999,true);
+      if(!document.querySelector('#answer').textContent.includes('Preserved partial text')) throw Error('Partial stream text lost on interruption');
       const oldRequest=window.ghost.speechAnswer({...window.copilot.config(),id:9001,question:'Superseded old question?'});
       await new Promise(r=>setTimeout(r,20));
       const newRequest=window.ghost.speechAnswer({...window.copilot.config(),id:9002,question:'Newest question?'});

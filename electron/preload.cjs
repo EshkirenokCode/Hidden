@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('ghost', {
   speechAnswer: request => ipcRenderer.invoke('speech:answer', request),
   cancelSpeechAnswer: () => ipcRenderer.invoke('speech:cancel'),
   onSpeechDelta: callback => listen('speech:delta', callback),
+  onSpeechNotice: callback => listen('speech:notice', callback),
   armMedia: enabled => ipcRenderer.invoke('media:arm', enabled),
   mediaDiagnostics: () => ipcRenderer.invoke('media:diagnostics'),
   startNativeAudio: () => ipcRenderer.invoke('audio:native-start'),

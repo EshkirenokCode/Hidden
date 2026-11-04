@@ -14,6 +14,10 @@ module.exports = async (url, options) => {
     const end = bytes.length - new TextEncoder().encode('data: '+JSON.stringify(events.at(-1))+'\n\n').length;
     return { ok: true, body: (async function* () {
       if(options.signal?.aborted) throw new DOMException('Aborted','AbortError');
+      if(typeof body.input==='string' && body.input.split('Вопрос:\n').at(-1).includes('DELAYED_TEST')) {
+        await new Promise(resolve=>setTimeout(resolve,12000));
+        if(options.signal?.aborted) throw new DOMException('Aborted','AbortError');
+      }
       yield bytes.slice(0,17);yield bytes.slice(17,end);
       await new Promise(resolve=>setTimeout(resolve,220));
       if(options.signal?.aborted) throw new DOMException('Aborted','AbortError');

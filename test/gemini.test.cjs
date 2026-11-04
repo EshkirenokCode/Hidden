@@ -21,6 +21,9 @@ test('general technical answers can use knowledge outside the candidate resume',
     return{ok:true,json:async()=>({status:'completed',steps:[{type:'model_output',content:[{type:'text',text:'Go — язык программирования.'}]}]})};
   });
 });
+test('fallback audio deadline is reported as transcription rather than a generic timeout',async()=>{
+  await assert.rejects(transcribeAudio({model:'gemini-3.5-flash-lite',vocabulary:[],audio:{data:'UklGRg==',mimeType:'audio/wav'}},'test',async()=>{throw new DOMException('Timed out','TimeoutError');}),/не распознал аудиофразу за 12 с/);
+});
 test('audio schema validates output and manual mode suppresses automatic answers',async()=>{
   const request={model:'gemini-3.5-flash-lite',context:'',conversation:'',autoAnswer:false,audio:{data:'UklGRg==',mimeType:'audio/wav'}};
   const result=await analyzeAudio(request,'test',async(url,options)=>{
