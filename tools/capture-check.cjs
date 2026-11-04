@@ -1,0 +1,10 @@
+// Local-only browser capture check. No recording is uploaded or written to disk.
+const http = require('node:http');
+const page = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Hidden · локальная проверка захвата</title><style>body{font:16px system-ui;background:#141719;color:#edf0ee;margin:24px}button{padding:12px;margin-right:12px}video{width:100%;max-height:75vh;background:#282e32}p{max-width:900px;line-height:1.5}</style><h1>Локальная проверка демонстрации</h1><p>Выберите весь экран, затем расположите окно Hidden поверх другого приложения. Содержимое показывается только здесь: оно не отправляется на сервер и не сохраняется.</p><button id="start">Выбрать источник</button><button id="stop" disabled>Остановить захват</button><p id="status">Захват выключен.</p><video autoplay muted playsinline></video><script>
+let stream;const video=document.querySelector('video'),status=document.querySelector('#status');
+function stop(){stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;status.textContent='Захват выключен.';document.querySelector('#stop').disabled=true;}
+document.querySelector('#start').onclick=async()=>{try{stop();stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});video.srcObject=stream;status.textContent='Локальный захват активен. Это проверка фактического потока Chrome, а не флага защиты Electron.';document.querySelector('#stop').disabled=false;stream.getVideoTracks()[0].onended=stop;}catch(e){status.textContent=e.name+': '+e.message;}};
+document.querySelector('#stop').onclick=stop;window.onbeforeunload=stop;
+</script></html>`;
+const server=http.createServer((req,res)=>{if(req.method!=='GET'||req.url!=='/'){res.writeHead(404);res.end();return;}res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src blob:; connect-src 'none'; frame-ancestors 'none'"});res.end(page);});
+server.listen(0,'127.0.0.1',()=>console.log('Capture check: http://127.0.0.1:'+server.address().port));

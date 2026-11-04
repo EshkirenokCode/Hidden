@@ -1,0 +1,30 @@
+{
+  "name": "hidden",
+  "version": "0.3.0",
+  "description": "Hidden desktop interview copilot",
+  "main": "electron/main.cjs",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "start": "electron .",
+    "test:smoke": "electron . --smoke-test",
+    "test:live": "node scripts/live-check.cjs",
+    "test:fixtures": "node scripts/prepare-fixtures.cjs",
+    "package:mac": "node scripts/package-mac.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.2.1"
+  },
+  "productName": "Hidden",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EshkirenokCode/Hidden.git"
+  }
+}
