@@ -12,6 +12,7 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#settings-form').requestSubmit();
       await waitFor(() => !document.querySelector('#settings').open);
       if (await window.ghost.keyStatus('openai')) throw Error('Key separation failed');
+      if((await window.ghost.testLiveSpeech()).error) throw Error('Live availability probe failed');
       for (const question of ['Что такое DNS?', 'Чем отличается TCP от UDP?', 'Что такое индекс базы данных?']) {
         window.copilot.receiveQuestion(question);
         if(document.querySelector('#question').value !== question) throw Error('Recognized question did not replace stale audio question');
@@ -95,15 +96,43 @@ module.exports = async ({ app, win, toggleWindow }) => {
       if(!document.querySelector('#session-status').textContent.includes('без отправки')) throw Error('Local monitor missing');
       document.querySelector('#stop-session').click();
       await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
+      document.querySelector('#speech-vocabulary').value='DENY_LIVE_TEST';
+      document.querySelector('#start-session').click();
+      await waitFor(() => !document.querySelector('#stop-session').disabled);
+      if(!document.querySelector('#session-status').textContent.includes('по фразам')) throw Error('Live rejection did not visibly fall back');
+      const {consumeAudioFrame}=await import('./session.mjs');
+      consumeAudioFrame(new Float32Array(8000).fill(.1),16000);
+      document.querySelector('#flush-audio').click();
+      await waitFor(() => document.querySelector('#answer-question').textContent==='Что такое DNS?');
+      await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
+      document.querySelector('#stop-session').click();
+      await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
+      document.querySelector('#speech-vocabulary').value='';
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
       if(!window.ghostSession.active()) throw Error('Audio start failed');
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Go (Golang)') && window.ghostSession.metrics()?.firstWordsMs != null);
+      if(window.ghostSession.metrics().totalMs != null) throw Error('Audio answer only appeared after completion');
+      if(!document.querySelector('#speech-correction').textContent.includes('Go (Golang)')) throw Error('Term correction not disclosed');
+      await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
+      if(!window.ghostSession.conversation().includes('Gemini smoke response')) throw Error('Audio answer missing from conversation');
+      const oldRequest=window.ghost.speechAnswer({...window.copilot.config(),id:9001,question:'Superseded old question?'});
+      await new Promise(r=>setTimeout(r,20));
+      const newRequest=window.ghost.speechAnswer({...window.copilot.config(),id:9002,question:'Newest question?'});
+      const [oldAnswer,newAnswer]=await Promise.all([oldRequest,newRequest]);
+      if(!oldAnswer.error || !newAnswer.answer?.includes('Newest question?')) throw Error('Superseded answer was not cancelled');
+      await window.ghost.setKey('gemini','');
+      await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
+      if(await window.ghost.keyStatus('gemini')) throw Error('Key deletion failed');
+      await window.ghost.setKey('gemini','smoke-test-not-a-real-key');
       document.querySelector('#stop-session').click();
       await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
+      const cancelledAnswer=window.ghost.speechAnswer({...window.copilot.config(),id:9003,question:'Must stop now?'});
       document.querySelector('#hide-stop').click();
       await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
+      if(!(await cancelledAnswer).error) throw Error('Emergency stop did not cancel speech answer');
       await new Promise(r=>setTimeout(r,100));
       const privacy=await window.ghost.privacyStatus();
       if(['darwin','win32'].includes(privacy.platform) && !privacy.protectionRequested) throw Error('Protection failed');
@@ -123,9 +152,9 @@ module.exports = async ({ app, win, toggleWindow }) => {
     await win.webContents.executeJavaScript('window.copilot.compact(true)');
     await new Promise(resolve=>setTimeout(resolve,100));
     const compactShot=await win.webContents.capturePage();fs.writeFileSync(path.join(__dirname,'../artifacts/compact.png'),compactShot.toPNG());
-    const size=compactShot.getSize(), pixels=compactShot.getBitmap();
+    const size=compactShot.getSize(), pixels=compactShot.toBitmap();
     const alpha=pixels[(100*size.width+Math.floor(size.width/2))*4+3];
     if(alpha >= 250) throw Error('Rendered overlay is opaque: '+alpha);
     delete result.image; console.log('SMOKE PASS', JSON.stringify(result));app.exit(0);
-  } catch(error) { console.error(error);app.exit(1); }
+  } catch(error) { console.error(error); console.error(await win.webContents.executeJavaScript(`JSON.stringify({classes:document.body.className,height:innerHeight,main:document.querySelector('main').getBoundingClientRect().height,answerHeight:document.querySelector('#answer').clientHeight,answerScroll:document.querySelector('#answer').scrollHeight,max:getComputedStyle(document.documentElement).getPropertyValue('--overlay-max-height')})`));app.exit(1); }
 };

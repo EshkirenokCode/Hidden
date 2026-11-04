@@ -11,20 +11,24 @@ export function encodeWav(chunks, sampleRate) {
   return buffer;
 }
 export class SpeechSegments {
-  constructor(sampleRate, onSegment) { this.rate = sampleRate; this.onSegment = onSegment; this.reset(); this.pre = []; }
+  constructor(sampleRate, onSegment, { silenceMs = 650 } = {}) { this.rate = sampleRate; this.onSegment = onSegment; this.silenceMs = silenceMs; this.noise = 0.001; this.threshold = 0.008; this.reset(); this.pre = []; this.preSamples = 0; }
   reset() { this.chunks = []; this.samples = 0; this.silent = 0; this.voiced = 0; }
   push(frame) {
     const rms = Math.sqrt(frame.reduce((s, n) => s + n * n, 0) / frame.length);
-    const speech = rms > 0.012;
-    if (!this.chunks.length && !speech) { this.pre.push(frame); if (this.pre.length > 3) this.pre.shift(); return rms; }
-    if (!this.chunks.length) { this.chunks.push(...this.pre); this.samples = this.pre.reduce((s, x) => s + x.length, 0); this.pre = []; }
+    this.threshold = Math.max(0.006, Math.min(0.025, this.noise * 3));
+    const speech = rms > this.threshold;
+    if (!speech) this.noise = this.noise * 0.98 + rms * 0.02;
+    if (!this.chunks.length && !speech) { this.pre.push(frame); this.preSamples += frame.length; while (this.preSamples > this.rate * 0.3 && this.pre.length > 1) this.preSamples -= this.pre.shift().length; return rms; }
+    if (!this.chunks.length) { this.chunks.push(...this.pre); this.samples = this.preSamples; this.pre = []; this.preSamples = 0; }
     this.chunks.push(frame); this.samples += frame.length;
     if (speech) { this.silent = 0; this.voiced += frame.length; } else this.silent += frame.length;
-    if (this.silent >= this.rate * 0.85 || this.samples >= this.rate * 15) this.flush();
+    if (this.silent >= this.rate * this.silenceMs / 1000 || this.samples >= this.rate * 12) this.flush();
     return rms;
   }
   flush() {
-    if (this.voiced >= this.rate * 0.25) this.onSegment(encodeWav(this.chunks, this.rate));
+    const emitted = this.voiced >= this.rate * 0.25;
+    if (emitted) this.onSegment(encodeWav(this.chunks, this.rate));
     this.reset();
+    return emitted;
   }
 }

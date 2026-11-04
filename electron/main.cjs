@@ -2,11 +2,12 @@ const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, d
 const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
+const { LiveTranscriber } = require('./live-transcriber.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { generate } = require('./provider.cjs');
-const { analyzeAudio, call } = require('./gemini.cjs');
+const { analyzeAudio, transcribeAudio, call } = require('./gemini.cjs');
 const keys = { openai: process.env.OPENAI_API_KEY || '', gemini: process.env.GEMINI_API_KEY || '' };
 // Preserve the development profile when changing the product name.
 app.setPath('userData', path.join(app.getPath('appData'), 'ghost-workspace'));
@@ -29,12 +30,15 @@ let clickThrough = false;
 const shortcuts = {};
 const nativeAudioPath = app.isPackaged ? path.join(process.resourcesPath, 'hidden-system-audio') : path.join(__dirname, '../native/bin/hidden-system-audio');
 let nativeAudio;
+let liveTranscriber;
+function stopSpeech() { liveTranscriber?.stop(); liveTranscriber = null; controllers.get('speech-answer')?.abort(); controllers.get('transcription')?.abort(); }
 function windowState() { return { compact: Boolean(normalBounds), pinned: Boolean(mainWindow?.isAlwaysOnTop()), clickThrough, shortcuts }; }
 function setClickThrough(enabled) { clickThrough = Boolean(enabled && normalBounds); mainWindow?.setIgnoreMouseEvents(clickThrough, { forward: true }); publishWindowState(); return clickThrough; }
 function publishWindowState() { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:state', windowState()); }
 function hideAndStop() {
   setClickThrough(false);
   nativeAudio?.stop();
+  stopSpeech();
   mediaArmed = false; captureMode = null; displaySource = null;
   for (const controller of controllers.values()) controller.abort();
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.webContents.send('session:stop'); mainWindow.hide(); }
@@ -62,7 +66,7 @@ async function runTask(type, work) {
   const started = performance.now();
   try { return { ...await work(controller.signal), elapsedMs: Math.round(performance.now() - started) }; }
   catch (error) { return fail(error); }
-  finally { controllers.delete(type); }
+  finally { if (controllers.get(type) === controller) controllers.delete(type); }
 }
 async function sources(thumbnailSize = { width: 320, height: 180 }) {
   const list = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize });
@@ -76,7 +80,7 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', e => e.preventDefault());
-  win.on('closed', () => { nativeAudio?.stop(); mediaArmed = false; captureMode = null; displaySource = null; for (const c of controllers.values()) c.abort(); });
+  win.on('closed', () => { nativeAudio?.stop(); stopSpeech(); mediaArmed = false; captureMode = null; displaySource = null; for (const c of controllers.values()) c.abort(); });
   win.loadURL(entry);
   if (smoke) {
     win.webContents.once('did-finish-load', () => require('../test/smoke-runner.cjs')({ app, win, toggleWindow }));
@@ -103,6 +107,10 @@ app.whenReady().then(() => {
     trusted(event); providerName(provider);
     if (typeof key !== 'string' || key.length > 512) throw Error('Некорректный ключ.');
     if (provider === 'gemini' && key.trim().endsWith('.')) throw Error('В конце ключа точка. Скопируйте ключ без знака пунктуации.');
+    if (provider === 'gemini' && keys.gemini !== key.trim() && mediaArmed) {
+      mediaArmed = false; captureMode = null; nativeAudio?.stop(); stopSpeech(); controllers.get('audio')?.abort();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('session:stop');
+    }
     keys[provider] = key.trim(); return Boolean(keys[provider]);
   });
   ipcMain.handle('key:test', (event, model) => {
@@ -152,6 +160,50 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('answer:cancel', event => { trusted(event); controllers.get('answer')?.abort(); });
   ipcMain.handle('audio:analyze', (event, request) => { trusted(event); return runTask('audio', async signal => await analyzeAudio(request, keys.gemini, fetchImpl, { signal })); });
+  ipcMain.handle('speech:transcribe', (event, request) => {
+    trusted(event); if (!mediaArmed) return { error: 'Сначала начните аудиосессию.' };
+    return runTask('transcription', signal => transcribeAudio(request, keys.gemini, fetchImpl, { signal }));
+  });
+  ipcMain.handle('speech:probe', event => {
+    trusted(event);
+    return runTask('speech-probe', async signal => {
+      const probe = new LiveTranscriber(() => {}, smoke ? require('../test/smoke-live.cjs') : undefined);
+      const cancel = () => probe.stop(); signal.addEventListener('abort', cancel, { once: true });
+      try { return await probe.start(keys.gemini); }
+      finally { signal.removeEventListener('abort', cancel); probe.stop(); }
+    });
+  });
+  ipcMain.handle('speech:live-start', async (event, request) => {
+    trusted(event);
+    if (!mediaArmed || !request || !Array.isArray(request.vocabulary) || request.vocabulary.length > 100 || request.vocabulary.some(x => typeof x !== 'string' || x.length > 80) || !Number.isSafeInteger(request.sessionId)) return { error: 'Некорректная аудиосессия.' };
+    liveTranscriber?.stop();
+    const current = new LiveTranscriber(value => { if (mediaArmed && liveTranscriber === current && !event.sender.isDestroyed()) event.sender.send('speech:live-event', { ...value, sessionId: request.sessionId }); }, smoke ? require('../test/smoke-live.cjs') : undefined);
+    liveTranscriber = current;
+    try { return await current.start(keys.gemini, request.vocabulary); } catch (error) { return fail(error); }
+  });
+  ipcMain.on('speech:pcm', (event, data) => {
+    trusted(event); if (!mediaArmed || typeof data !== 'string' || data.length > 12000 || data.length < 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return;
+    liveTranscriber?.send(data);
+  });
+  ipcMain.on('speech:end-turn', event => { trusted(event); if (mediaArmed) liveTranscriber?.endTurn(); });
+  ipcMain.handle('speech:cancel', event => { trusted(event); controllers.get('speech-answer')?.abort(); });
+  ipcMain.handle('speech:answer', (event, request) => {
+    trusted(event); if (!mediaArmed || !Number.isSafeInteger(request?.id)) return { error: 'Аудиосессия остановлена.' };
+    const previous = controllers.get('speech-answer'); previous?.abort(); controllers.delete('speech-answer');
+    return runTask('speech-answer', async signal => {
+      const began = performance.now(); let firstTokenMs;
+      const firstWordDeadline = new AbortController();
+      const firstWordTimer = setTimeout(() => firstWordDeadline.abort(new DOMException('Gemini не начал ответ за 8 секунд.', 'TimeoutError')), 8000);
+      try {
+      const answer = await generate({ ...request, provider: 'gemini' }, keys.gemini, fetchImpl, { signal: AbortSignal.any([signal, firstWordDeadline.signal, AbortSignal.timeout(20000)]), onDelta: text => {
+        clearTimeout(firstWordTimer);
+        firstTokenMs ??= Math.round(performance.now() - began);
+        if (!signal.aborted && mediaArmed && !event.sender.isDestroyed()) event.sender.send('speech:delta', { id: request.id, text, firstTokenMs });
+      } });
+      return { answer, firstTokenMs, model: request.model };
+      } finally { clearTimeout(firstWordTimer); }
+    });
+  });
   ipcMain.handle('media:diagnostics', event => {
     trusted(event);
     return { nativeAudio: process.platform === 'darwin' && fs.existsSync(nativeAudioPath) && !smoke, nativePicker, platform: process.platform, screen: process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'unknown', microphone: process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('microphone') : 'unknown', applicationDenial: lastCaptureDenial };
@@ -168,7 +220,7 @@ app.whenReady().then(() => {
     if (![false, 'microphone', 'system'].includes(mode)) throw Error('Неизвестный источник звука.');
     captureMode = mode || null; mediaArmed = Boolean(mode); lastCaptureDenial = '';
     if (mediaArmed) { mainWindow.show(); mainWindow.focus(); }
-    else { nativeAudio?.stop(); displaySource = null; controllers.get('audio')?.abort(); }
+    else { nativeAudio?.stop(); stopSpeech(); displaySource = null; controllers.get('audio')?.abort(); }
   });
   ipcMain.handle('media:sources', async event => {
     trusted(event);
@@ -207,5 +259,5 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); else { setClickThrough(false); mainWindow.show(); mainWindow.focus(); } });
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());
-app.on('before-quit', () => nativeAudio?.stop());
+app.on('before-quit', () => { nativeAudio?.stop(); stopSpeech(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

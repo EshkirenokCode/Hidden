@@ -8,6 +8,28 @@ history = history.filter(x => typeof x?.question === 'string' && typeof x?.answe
 let currentAnswer = '', busy = false, pinned = false, streamingText = '', pendingImage = null;
 let selectedEntry = null, readingHistory = false, unread = 0;
 let syncedQuestion = '', heardQuestion = '';
+let speechStream = null, speechPaint;
+function beginSpeechAnswer(id, question) {
+  clearTimeout(speechPaint); speechStream = { id, question, text: '' };
+  if (!busy && !readingHistory) { showError(''); showAnswer(''); $('#answer-question').textContent = question; $('#timing').textContent = 'Готовим ответ…'; }
+}
+function speechDelta(id, text) {
+  if (speechStream?.id !== id) return;
+  speechStream.text += text;
+  if (speechPaint) return;
+  speechPaint = setTimeout(() => {
+    speechPaint = null;
+    if (speechStream?.id !== id || busy || readingHistory) return;
+    showAnswer(speechStream.text, true); $('#answer-question').textContent = speechStream.question;
+    $('#timing').textContent = 'Ответ поступает…';
+  }, 40);
+}
+function endSpeechAnswer(id) {
+  if (id !== undefined && speechStream?.id !== id) return;
+  clearTimeout(speechPaint); speechPaint = null;
+  if (speechStream && !busy && !readingHistory) $('#timing').textContent = 'Генерация завершена или остановлена';
+  speechStream = null;
+}
 function receiveQuestion(question) {
   heardQuestion = question;
   const field = $('#question');
@@ -54,6 +76,10 @@ $('#click-through').onclick = async () => { const result = await window.ghost.cl
 $('#session-details').onclick = () => { document.body.classList.toggle('audio-expanded'); $('#session-details').setAttribute('aria-expanded', String(document.body.classList.contains('audio-expanded'))); scheduleFit(); };
 $('#context').value = String(read('ghost.context', '')).slice(0, 30000);
 $('#custom-prompt').value = String(read('ghost.prompt', '')).slice(0, 4000);
+$('#speech-vocabulary').value = String(read('hidden.vocabulary', '')).slice(0, 6000);
+$('#speech-vocabulary').oninput = () => save('hidden.vocabulary', $('#speech-vocabulary').value);
+$('#recognition-mode').value = ['auto','live','batch'].includes(read('hidden.recognitionMode','auto')) ? read('hidden.recognitionMode','auto') : 'auto';
+$('#recognition-mode').onchange = () => save('hidden.recognitionMode', $('#recognition-mode').value);
 $('#provider').value = ['openai', 'gemini'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
 function loadProvider() {
   const provider = $('#provider').value;
@@ -61,7 +87,7 @@ function loadProvider() {
   $('#key-label').textContent = provider === 'gemini' ? 'Gemini API key' : 'OpenAI API key';
   $('#api-key').value = ''; $('#model').setAttribute('list', provider === 'gemini' ? 'model-options' : '');
 }
-function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), context: $('#context').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
+function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
 function showAnswer(answer, streaming = false) {
   const box = $('#answer'), scroll = box.scrollTop, following = box.scrollHeight - scroll - box.clientHeight < 32;
   currentAnswer = answer; $('#timing').textContent = ''; box.replaceChildren();
@@ -147,6 +173,17 @@ $('#test-key').onclick = async () => {
   finally { $('#test-key').disabled = false; }
 };
 $('#forget-key').onclick = async () => { await window.ghost.setKey($('#provider').value, ''); $('#api-key').value = ''; await updateStatus(); };
+$('#test-live').onclick = async () => {
+  const button = $('#test-live'); button.disabled = true;
+  $('#settings-error').textContent = 'Проверяем доступ к Live · без передачи аудио…';
+  try {
+    if ($('#provider').value !== 'gemini') throw Error('Для Live выберите Gemini.');
+    if ($('#api-key').value.trim()) { await window.ghost.setKey('gemini', $('#api-key').value.trim()); $('#api-key').value = ''; await updateStatus(); }
+    const result = await window.ghost.testLiveSpeech();
+    $('#settings-error').textContent = result.error || `Live доступен · подключение ${(result.elapsedMs / 1000).toFixed(2)} с. Аудио не отправлялось.`;
+  } catch (error) { $('#settings-error').textContent = error.message; }
+  finally { button.disabled = false; }
+};
 $('#pin').onclick = async () => { pinned = await window.ghost.pin(!pinned); $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; };
 async function compact(enabled) { const active = await window.ghost.compact(enabled); document.body.classList.toggle('compact', active); document.documentElement.classList.toggle('overlay-root', active); if (!active) document.body.classList.remove('height-limited'); $('#compact').textContent = active ? 'Развернуть' : 'Компактно'; scheduleFit(); }
 $('#compact').onclick = () => compact(!document.body.classList.contains('compact'));
@@ -181,5 +218,5 @@ async function ask(question) {
 $('#question-form').onsubmit = event => { event.preventDefault(); ask($('#question').value); };
 $('#question').onkeydown = event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $('#question-form').requestSubmit(); } };
 $('#import-context').onclick = async () => { try { const result = await window.ghost.importContext(); if (result.error) throw Error(result.error); if (result.text !== undefined) { $('#context').value = result.text; $('#context').dispatchEvent(new Event('input')); } } catch (error) { showError(error.message); } };
-window.copilot = { config, presentResult, receiveQuestion, followLive, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
+window.copilot = { config, presentResult, receiveQuestion, followLive, beginSpeechAnswer, speechDelta, endSpeechAnswer, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
 renderHistory(); updateStatus(); updatePrivacy();
