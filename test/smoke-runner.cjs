@@ -42,6 +42,23 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#compact').click();
       await waitFor(() => document.body.classList.contains('compact'));
       if(!(await window.ghost.privacyStatus()).pinned) throw Error('Compact did not pin');
+      window.copilot.presentResult({answer:'Short answer',elapsedMs:1},'Short');
+      await new Promise(r=>setTimeout(r,250));
+      const shortHeight = innerHeight;
+      window.copilot.presentResult({answer:Array(10).fill('Readable answer line.').join(nl),elapsedMs:1},'Growing');
+      await new Promise(r=>setTimeout(r,350));
+      if(innerHeight <= shortHeight) throw Error('Overlay did not grow');
+      const answerBox = document.querySelector('#answer');
+      if(answerBox.scrollHeight > answerBox.clientHeight + 2) throw Error('Medium answer clipped');
+      const bg = getComputedStyle(document.querySelector('main')).backgroundColor;
+      if(!bg.startsWith('rgba(')) throw Error('Overlay background not translucent');
+      if(getComputedStyle(answerBox).opacity !== '1') throw Error('Text opacity reduced');
+      window.copilot.presentResult({answer:Array(150).fill('Long answer line.').join(nl),elapsedMs:1},'Long');
+      await new Promise(r=>setTimeout(r,350));
+      if(!document.body.classList.contains('height-limited') || answerBox.scrollHeight <= answerBox.clientHeight) throw Error('Long answer not scrollable');
+      window.copilot.presentResult({answer:'Incoming audio answer',elapsedMs:1},'Short again');
+      await new Promise(r=>setTimeout(r,250));
+      if(document.body.classList.contains('height-limited') || innerHeight > shortHeight + 10) throw Error('Overlay did not shrink');
       for(const selector of ['#question','#submit','#compact-snapshot','#previous-answer']) {
         if(!document.querySelector(selector).getBoundingClientRect().width) throw Error('Compact control hidden: '+selector);
       }
@@ -57,15 +74,21 @@ module.exports = async ({ app, win, toggleWindow }) => {
       if(!document.body.classList.contains('compact')) throw Error('Compact failed');
       document.querySelector('#compact').click();
       await waitFor(() => !document.body.classList.contains('compact'));
+      document.querySelector('#source-microphone').click();
+      document.querySelector('#check-sound').click();
+      await waitFor(() => !document.querySelector('#stop-session').disabled);
+      if(!document.querySelector('#session-status').textContent.includes('без отправки')) throw Error('Local monitor missing');
+      document.querySelector('#stop-session').click();
+      await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
       if(!window.ghostSession.active()) throw Error('Audio start failed');
       document.querySelector('#stop-session').click();
-      await waitFor(() => !window.ghostSession.active());
+      await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
       document.querySelector('#hide-stop').click();
-      await waitFor(() => !window.ghostSession.active());
+      await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
       await new Promise(r=>setTimeout(r,100));
       const privacy=await window.ghost.privacyStatus();
       if(['darwin','win32'].includes(privacy.platform) && !privacy.protectionRequested) throw Error('Protection failed');
@@ -85,6 +108,9 @@ module.exports = async ({ app, win, toggleWindow }) => {
     await win.webContents.executeJavaScript('window.copilot.compact(true)');
     await new Promise(resolve=>setTimeout(resolve,100));
     const compactShot=await win.webContents.capturePage();fs.writeFileSync(path.join(__dirname,'../artifacts/compact.png'),compactShot.toPNG());
+    const size=compactShot.getSize(), pixels=compactShot.getBitmap();
+    const alpha=pixels[(100*size.width+Math.floor(size.width/2))*4+3];
+    if(alpha >= 250) throw Error('Rendered overlay is opaque: '+alpha);
     delete result.image; console.log('SMOKE PASS', JSON.stringify(result));app.exit(0);
   } catch(error) { console.error(error);app.exit(1); }
 };

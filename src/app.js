@@ -7,6 +7,32 @@ if (!Array.isArray(history)) history = [];
 history = history.filter(x => typeof x?.question === 'string' && typeof x?.answer === 'string').slice(0, 30);
 let currentAnswer = '', busy = false, pinned = false, streamingText = '', pendingImage = null;
 let selectedEntry = null, readingHistory = false, unread = 0;
+let fitTimer;
+function scheduleFit() {
+  if (fitTimer || !document.body.classList.contains('compact')) return;
+  fitTimer = setTimeout(async () => {
+    fitTimer = null;
+    if (!document.body.classList.contains('compact')) return;
+    const main = document.querySelector('main'), answer = $('#answer');
+    const wasLimited = document.body.classList.contains('height-limited');
+    document.body.classList.remove('height-limited');
+    const naturalHeight = main.getBoundingClientRect().height + Math.max(0, answer.scrollHeight - answer.clientHeight) + 2;
+    document.body.classList.toggle('height-limited', wasLimited);
+    const result = await window.ghost.fitContent(naturalHeight);
+    if (!result || !document.body.classList.contains('compact')) return;
+    document.documentElement.style.setProperty('--overlay-max-height', result.maxHeight + 'px');
+    document.body.classList.toggle('height-limited', result.limited);
+  }, 32);
+}
+new ResizeObserver(scheduleFit).observe(document.querySelector('main'));
+new MutationObserver(scheduleFit).observe(document.querySelector('main'), { childList: true, characterData: true, subtree: true });
+window.addEventListener('resize', scheduleFit);
+const storedOpacity = Number(read('hidden.overlayOpacity', 38));
+$('#overlay-opacity').value = Number.isFinite(storedOpacity) ? Math.max(15, Math.min(85, storedOpacity)) : 38;
+function opacity() { const value = Number($('#overlay-opacity').value); document.documentElement.style.setProperty('--overlay-alpha', String(value / 100)); $('#opacity-value').textContent = value + '%'; save('hidden.overlayOpacity', value); }
+$('#overlay-opacity').oninput = opacity; opacity();
+$('#click-through').onclick = async () => { const result = await window.ghost.clickThrough($('#click-through').getAttribute('aria-pressed') !== 'true'); if (result.error) showError(result.error); };
+$('#session-details').onclick = () => { document.body.classList.toggle('audio-expanded'); $('#session-details').setAttribute('aria-expanded', String(document.body.classList.contains('audio-expanded'))); scheduleFit(); };
 $('#context').value = String(read('ghost.context', '')).slice(0, 30000);
 $('#custom-prompt').value = String(read('ghost.prompt', '')).slice(0, 4000);
 $('#provider').value = ['openai', 'gemini'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
@@ -78,7 +104,7 @@ async function updatePrivacy() {
   const missing = Object.values(state.shortcuts || {}).filter(x => !x.registered).map(x => x.chord.replace('CommandOrControl', 'Cmd/Ctrl'));
   $('#shortcut-warning').hidden = !missing.length; $('#shortcut-warning').textContent = `Сочетания заняты: ${missing.join(', ')}. Используйте кнопки в окне.`;
 }
-function syncWindow(state) { pinned = state.pinned; $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; }
+function syncWindow(state) { pinned = state.pinned; $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; $('#click-through').setAttribute('aria-pressed', String(Boolean(state.clickThrough))); $('#click-through').textContent = state.clickThrough ? 'Клики сквозь · ⌘⇧M' : 'Сквозь клики'; }
 window.ghost.onWindowState(syncWindow);
 $('#hide-stop').onclick = () => window.ghost.hideStop();
 window.ghost.onStop(() => { window.ghostSession?.stop(); showError(''); });
@@ -103,7 +129,7 @@ $('#test-key').onclick = async () => {
 };
 $('#forget-key').onclick = async () => { await window.ghost.setKey($('#provider').value, ''); $('#api-key').value = ''; await updateStatus(); };
 $('#pin').onclick = async () => { pinned = await window.ghost.pin(!pinned); $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; };
-async function compact(enabled) { const active = await window.ghost.compact(enabled); document.body.classList.toggle('compact', active); $('#compact').textContent = active ? 'Развернуть' : 'Компактно'; }
+async function compact(enabled) { const active = await window.ghost.compact(enabled); document.body.classList.toggle('compact', active); document.documentElement.classList.toggle('overlay-root', active); if (!active) document.body.classList.remove('height-limited'); $('#compact').textContent = active ? 'Развернуть' : 'Компактно'; scheduleFit(); }
 $('#compact').onclick = () => compact(!document.body.classList.contains('compact'));
 $('#clear').onclick = () => { history = []; selectedEntry = null; readingHistory = false; unread = 0; save('ghost.history', history); renderHistory(); };
 $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(currentAnswer); $('#copy').textContent = 'Скопировано'; setTimeout(() => { $('#copy').textContent = 'Копировать'; }, 1500); } catch { showError('Не удалось скопировать.'); } };

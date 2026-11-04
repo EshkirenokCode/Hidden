@@ -1,4 +1,7 @@
-const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, dialog, systemPreferences, screen } = require('electron');
+const { fitOverlay } = require('./overlay-layout.cjs');
+const { allowMediaRequest } = require('./media-policy.cjs');
+const { SystemAudio } = require('./system-audio.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -16,15 +19,23 @@ if (smoke) {
   keys.openai = ''; keys.gemini = '';
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 }
-let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = null;
+let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = null, captureMode = null;
+let lastCaptureDenial = '';
+const nativePicker = process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 15 && !smoke;
 let sourceIds = new Set();
 let normalBounds;
 let compactPinned = false;
+let clickThrough = false;
 const shortcuts = {};
-function windowState() { return { compact: Boolean(normalBounds), pinned: Boolean(mainWindow?.isAlwaysOnTop()), shortcuts }; }
+const nativeAudioPath = app.isPackaged ? path.join(process.resourcesPath, 'hidden-system-audio') : path.join(__dirname, '../native/bin/hidden-system-audio');
+let nativeAudio;
+function windowState() { return { compact: Boolean(normalBounds), pinned: Boolean(mainWindow?.isAlwaysOnTop()), clickThrough, shortcuts }; }
+function setClickThrough(enabled) { clickThrough = Boolean(enabled && normalBounds); mainWindow?.setIgnoreMouseEvents(clickThrough, { forward: true }); publishWindowState(); return clickThrough; }
 function publishWindowState() { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:state', windowState()); }
 function hideAndStop() {
-  mediaArmed = false; displaySource = null;
+  setClickThrough(false);
+  nativeAudio?.stop();
+  mediaArmed = false; captureMode = null; displaySource = null;
   for (const controller of controllers.values()) controller.abort();
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.webContents.send('session:stop'); mainWindow.hide(); }
 }
@@ -38,6 +49,7 @@ function trusted(event) {
 }
 function toggleWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  setClickThrough(false);
   if (mainWindow.isVisible()) mainWindow.hide(); else { mainWindow.show(); mainWindow.focus(); }
 }
 function fail(error) {
@@ -57,14 +69,14 @@ async function sources(thumbnailSize = { width: 320, height: 180 }) {
   return list.filter(s => s.name !== 'Hidden' && s.name !== 'Ghost · Interview workspace' && !s.name.startsWith('Ghost ·'));
 }
 function createWindow() {
-  const win = new BrowserWindow({ show: false, width: 1340, height: 900, minWidth: 900, minHeight: 680, backgroundColor: '#101113', title: 'Hidden', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
+  const win = new BrowserWindow({ show: false, frame: false, transparent: true, hasShadow: false, width: 1340, height: 900, minWidth: 900, minHeight: 680, backgroundColor: '#00000000', title: 'Hidden', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   mainWindow = win;
   normalBounds = null;
   if (['darwin', 'win32'].includes(process.platform)) win.setContentProtection(true);
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', e => e.preventDefault());
-  win.on('closed', () => { mediaArmed = false; displaySource = null; for (const c of controllers.values()) c.abort(); });
+  win.on('closed', () => { nativeAudio?.stop(); mediaArmed = false; captureMode = null; displaySource = null; for (const c of controllers.values()) c.abort(); });
   win.loadURL(entry);
   if (smoke) {
     win.webContents.once('did-finish-load', () => require('../test/smoke-runner.cjs')({ app, win, toggleWindow }));
@@ -73,18 +85,19 @@ function createWindow() {
 }
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const allowed = wc === mainWindow?.webContents && wc.getURL() === entry && mediaArmed && permission === 'media' && (details.mediaTypes || []).every(type => type === 'audio');
+    const allowed = allowMediaRequest({ trusted: wc === mainWindow?.webContents && wc?.getURL() === entry && mediaArmed, mode: captureMode, permission, mediaTypes: details.mediaTypes || [], mainFrame: details.isMainFrame !== false && (!details.requestingUrl || details.requestingUrl === entry) });
+    if (!allowed && wc === mainWindow?.webContents) lastCaptureDenial = `Hidden отклонил запрос ${permission} (режим ${captureMode || 'не запущен'}).`;
     callback(allowed);
   });
-  session.defaultSession.setPermissionCheckHandler((wc, permission) => wc === mainWindow?.webContents && wc.getURL() === entry && mediaArmed && ['media', 'display-capture'].includes(permission));
+  session.defaultSession.setPermissionCheckHandler((wc, permission, _origin, details) => allowMediaRequest({ trusted: wc === mainWindow?.webContents && wc?.getURL() === entry && mediaArmed, mode: captureMode, permission, mediaTypes: details.mediaType ? [details.mediaType] : ['audio'], mainFrame: details.isMainFrame !== false && (!details.requestingUrl || details.requestingUrl === entry) }));
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    if (request.frame !== mainWindow?.webContents.mainFrame || !displaySource || !mediaArmed) { callback({}); return; }
+    if (request.frame !== mainWindow?.webContents.mainFrame || !displaySource || captureMode !== 'system' || !mediaArmed) { lastCaptureDenial = 'Не выбран источник системного звука.'; callback({}); return; }
     try {
       const source = (await sources({ width: 0, height: 0 })).find(s => s.id === displaySource);
       displaySource = null;
       callback(source ? { video: source, audio: 'loopback' } : {});
     } catch { displaySource = null; callback({}); }
-  });
+  }, { useSystemPicker: nativePicker });
   ipcMain.handle('key:status', (event, provider) => { trusted(event); return Boolean(keys[providerName(provider)]); });
   ipcMain.handle('key:set', (event, provider, key) => {
     trusted(event); providerName(provider);
@@ -105,10 +118,23 @@ app.whenReady().then(() => {
   ipcMain.handle('window:hide-stop', event => { trusted(event); hideAndStop(); });
   ipcMain.handle('window:compact', (event, enabled) => {
     trusted(event); const win = BrowserWindow.fromWebContents(event.sender);
-    if (enabled && !normalBounds) { normalBounds = win.getBounds(); compactPinned = win.isAlwaysOnTop(); win.setAlwaysOnTop(true); win.setMinimumSize(480, 500); win.setSize(650, 720); }
-    else if (!enabled && normalBounds) { win.setMinimumSize(900, 680); win.setBounds(normalBounds); normalBounds = null; win.setAlwaysOnTop(compactPinned); }
+    if (enabled && !normalBounds) { normalBounds = win.getBounds(); compactPinned = win.isAlwaysOnTop(); win.setAlwaysOnTop(true); win.setMinimumSize(420, 220); win.setSize(620, 360); }
+    else if (!enabled && normalBounds) { setClickThrough(false); win.setMinimumSize(900, 680); win.setBounds(normalBounds); normalBounds = null; win.setAlwaysOnTop(compactPinned); }
     publishWindowState();
     return Boolean(normalBounds);
+  });
+  ipcMain.handle('window:fit', (event, naturalHeight) => {
+    trusted(event); const win = BrowserWindow.fromWebContents(event.sender);
+    if (!normalBounds || typeof naturalHeight !== 'number' || !Number.isFinite(naturalHeight)) return null;
+    const current = win.getBounds();
+    const result = fitOverlay(current, screen.getDisplayMatching(current).workArea, Math.min(100000, Math.max(0, naturalHeight)));
+    if (Object.keys(result.bounds).some(key => Math.abs(result.bounds[key] - current[key]) > 1)) win.setBounds(result.bounds);
+    return result;
+  });
+  ipcMain.handle('window:click-through', (event, enabled) => {
+    trusted(event);
+    if (enabled && (!shortcuts.mouse?.registered || !shortcuts.hide?.registered)) return { error: 'Горячая клавиша возврата занята. Режим пропуска кликов недоступен.' };
+    return { enabled: setClickThrough(enabled) };
   });
   ipcMain.handle('window:pin', (event, enabled) => { trusted(event); const win = BrowserWindow.fromWebContents(event.sender); win.setAlwaysOnTop(Boolean(enabled)); publishWindowState(); return win.isAlwaysOnTop(); });
   ipcMain.handle('answer:generate', (event, request) => {
@@ -126,9 +152,23 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('answer:cancel', event => { trusted(event); controllers.get('answer')?.abort(); });
   ipcMain.handle('audio:analyze', (event, request) => { trusted(event); return runTask('audio', async signal => await analyzeAudio(request, keys.gemini, fetchImpl, { signal })); });
-  ipcMain.handle('media:arm', (event, enabled) => {
-    trusted(event); mediaArmed = Boolean(enabled);
-    if (!mediaArmed) { displaySource = null; controllers.get('audio')?.abort(); }
+  ipcMain.handle('media:diagnostics', event => {
+    trusted(event);
+    return { nativeAudio: process.platform === 'darwin' && fs.existsSync(nativeAudioPath) && !smoke, nativePicker, platform: process.platform, screen: process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'unknown', microphone: process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('microphone') : 'unknown', applicationDenial: lastCaptureDenial };
+  });
+  ipcMain.handle('audio:native-start', async event => {
+    trusted(event);
+    if (captureMode !== 'system' || !mediaArmed || process.platform !== 'darwin') return { error: 'Системный источник не включён.' };
+    nativeAudio?.stop();
+    nativeAudio = new SystemAudio(nativeAudioPath, value => { if (!event.sender.isDestroyed() && mediaArmed) event.sender.send('audio:pcm', value); }, error => { if (!event.sender.isDestroyed()) event.sender.send('audio:native-error', error); });
+    try { return await nativeAudio.start(); } catch (error) { return fail(error); }
+  });
+  ipcMain.handle('media:arm', (event, mode) => {
+    trusted(event);
+    if (![false, 'microphone', 'system'].includes(mode)) throw Error('Неизвестный источник звука.');
+    captureMode = mode || null; mediaArmed = Boolean(mode); lastCaptureDenial = '';
+    if (mediaArmed) { mainWindow.show(); mainWindow.focus(); }
+    else { nativeAudio?.stop(); displaySource = null; controllers.get('audio')?.abort(); }
   });
   ipcMain.handle('media:sources', async event => {
     trusted(event);
@@ -162,8 +202,10 @@ app.whenReady().then(() => {
   register('snapshot', 'CommandOrControl+Shift+S', () => mainWindow?.webContents.send('session:snapshot'));
   register('previous', 'CommandOrControl+Shift+Left', () => mainWindow?.webContents.send('answer:navigate', 1));
   register('next', 'CommandOrControl+Shift+Right', () => mainWindow?.webContents.send('answer:navigate', -1));
+  register('mouse', 'CommandOrControl+Shift+M', () => setClickThrough(!clickThrough));
   createWindow();
-  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); else { mainWindow.show(); mainWindow.focus(); } });
+  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); else { setClickThrough(false); mainWindow.show(); mainWindow.focus(); } });
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', () => nativeAudio?.stop());
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

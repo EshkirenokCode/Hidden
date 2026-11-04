@@ -3,6 +3,7 @@ node_modules/
 artifacts/
 .DS_Store
 dist/
+native/bin/
 .env.*
 *.key
 *.pem

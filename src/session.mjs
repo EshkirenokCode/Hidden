@@ -1,7 +1,28 @@
 import { SpeechSegments } from './audio.mjs';
+import { captureError } from './capture.mjs';
 const $ = s => document.querySelector(s);
 let running = false, starting = false, stream, audioContext, worklet, input, segments, queue = [], processing = false, epoch = 0, timer, started = 0;
 let transcript = [], lastQuestion = '', selectedScreen = null;
+let monitorOnly = false;
+const storedSource = localStorage.getItem('hidden.audioSource');
+if (storedSource === 'system') $('#audio-source').value = 'system';
+function sourceButtons() { for (const name of ['microphone','system']) { $('#source-' + name).setAttribute('aria-pressed', String($('#audio-source').value === name)); $('#source-' + name).disabled = $('#audio-source').disabled; } }
+for (const name of ['microphone','system']) $('#source-' + name).onclick = () => { if ($('#audio-source').disabled || running || starting) return; $('#audio-source').value = name; localStorage.setItem('hidden.audioSource', name); sourceButtons(); };
+sourceButtons();
+let nativeRate = 0;
+function updateMeter(rms) {
+  $('#audio-level').value = Math.min(1, Math.max(rms * 8, $('#audio-level').value * 0.9));
+  if (monitorOnly && rms > 0.001) status('Звук получен ✓ · локальная проверка, без отправки в API.');
+}
+window.ghost.onNativeAudio(packet => {
+  if (!running) return;
+  if (packet.diagnostic) { if (monitorOnly) status(packet.diagnostic + ' · ожидаем звуковой сигнал, без отправки в API.'); return; }
+  if (!segments || nativeRate !== packet.sampleRate) { nativeRate = packet.sampleRate; segments = new SpeechSegments(nativeRate, enqueue); }
+  const binary = atob(packet.data), bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+  if (bytes.byteLength % 4) return;
+  updateMeter(segments.push(new Float32Array(bytes.buffer)));
+});
+window.ghost.onNativeAudioError(async error => { if (running) { await stop(); ui.showError(error); } });
 const ui = window.copilot;
 const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
@@ -33,7 +54,7 @@ async function drain() {
   finally { processing = false; if (running && queue.length) drain(); }
 }
 function enqueue(buffer) {
-  if (!running) return;
+  if (!running || monitorOnly) return;
   if (queue.length >= 3) { ui.showError('API не успевает обрабатывать звук. Сессия остановлена; уменьшите нагрузку или выберите другую модель.'); stop(); return; }
   queue.push(buffer); drain();
 }
@@ -61,17 +82,27 @@ async function chooseSource() {
 function cancelPicker() { if (pickResolve) { pickResolve(null); pickResolve = null; } }
 $('#source-close').onclick = () => { cancelPicker(); $('#source-picker').close(); };
 $('#source-picker').addEventListener('cancel', cancelPicker);
-async function start() {
+async function start(testOnly = false) {
   if (running || starting || processing) return;
   starting = true; const id = ++epoch; $('#start-session').disabled = true;
   try {
     const cfg = ui.config();
-    if (cfg.provider !== 'gemini') throw Error('Для аудиосессии выберите Gemini в настройках.');
-    if (!(await window.ghost.keyStatus('gemini'))) { $('#settings').showModal(); return; }
+    if (!testOnly && cfg.provider !== 'gemini') throw Error('Для аудиосессии выберите Gemini в настройках.');
+    if (!testOnly && !(await window.ghost.keyStatus('gemini'))) { $('#settings').showModal(); return; }
+    const kind = $('#audio-source').value;
+    const diagnostics = await window.ghost.mediaDiagnostics();
     let source;
-    if ($('#audio-source').value === 'system') { source = await chooseSource(); if (!source) return; }
-    await window.ghost.armMedia(true);
-    if (source) { await window.ghost.selectSource(source.id); stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }); }
+    if (kind === 'system' && !diagnostics.nativeAudio && !diagnostics.nativePicker) { source = await chooseSource(); if (!source) return; }
+    await window.ghost.armMedia(kind);
+    let nativeStarted = false;
+    if (kind === 'system' && diagnostics.nativeAudio) {
+      const result = await window.ghost.startNativeAudio();
+      if (id !== epoch) return;
+      nativeStarted = !result.error;
+      if (nativeStarted) { segments = null; nativeRate = 0; }
+    }
+    if (!nativeStarted) {
+    if (kind === 'system') { if (source) await window.ghost.selectSource(source.id); stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }); }
     else stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
     if (id !== epoch) { stream.getTracks().forEach(t => t.stop()); return; }
     const track = stream.getAudioTracks()[0];
@@ -83,13 +114,15 @@ async function start() {
     segments = new SpeechSegments(audioContext.sampleRate, enqueue);
     input = audioContext.createMediaStreamSource(new MediaStream([track]));
     worklet = new AudioWorkletNode(audioContext, 'ghost-audio');
-    worklet.port.onmessage = event => { if (!running) return; const rms = segments.push(event.data); $('#audio-level').value = Math.min(1, rms * 8); };
+    worklet.port.onmessage = event => { if (!running) return; updateMeter(segments.push(event.data)); };
     const mute = audioContext.createGain(); mute.gain.value = 0; input.connect(worklet).connect(mute).connect(audioContext.destination);
-    await audioContext.resume(); running = true; started = Date.now();
+    await audioContext.resume();
+    }
+    running = true; monitorOnly = testOnly; started = Date.now();
     timer = setInterval(() => { const sec = Math.floor((Date.now() - started) / 1000); $('#session-time').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }, 1000);
-    $('#stop-session').disabled = false; $('#flush-audio').disabled = false; $('#audio-source').disabled = true; $('#live-dot').classList.add('listening');
-    status(source ? 'Слушаем системный звук · проверьте индикатор уровня' : 'Слушаем микрофон · после паузы фраза уйдёт в Gemini');
-  } catch (error) { ui.showError(error.name === 'NotAllowedError' ? 'Доступ к звуку или экрану запрещён. Разрешите его в настройках ОС.' : error.message); await stop(); }
+    $('#stop-session').disabled = false; $('#flush-audio').disabled = testOnly; $('#audio-source').disabled = true; sourceButtons(); $('#check-sound').disabled = true; $('#live-dot').classList.add('listening');
+    status(testOnly ? 'Проверка звука: только индикатор, без отправки аудио в API. Включите звук и проверьте уровень.' : kind === 'system' ? 'Слушаем системный звук · проверьте индикатор уровня' : 'Слушаем микрофон · после паузы фраза уйдёт в Gemini');
+  } catch (error) { if (id !== epoch) return; const diagnostics = await window.ghost.mediaDiagnostics(); await stop(); ui.showError(captureError(error, $('#audio-source').value, diagnostics)); }
   finally { starting = false; $('#start-session').disabled = running; if (!running) { stream?.getTracks().forEach(t => t.stop()); if (audioContext && audioContext.state !== 'closed') await audioContext.close(); await window.ghost.armMedia(false); } }
 }
 async function stop() {
@@ -97,8 +130,10 @@ async function stop() {
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); }); stream = null;
   if (worklet) { worklet.port.onmessage = null; worklet.disconnect(); } input?.disconnect();
   if (audioContext && audioContext.state !== 'closed') await audioContext.close();
+  worklet = null; input = null; audioContext = null; segments = null; nativeRate = 0;
   await window.ghost.armMedia(false);
-  $('#start-session').disabled = false; $('#stop-session').disabled = true; $('#flush-audio').disabled = true; $('#audio-source').disabled = false; $('#live-dot').classList.remove('listening'); $('#audio-level').value = 0;
+  $('#start-session').disabled = false; $('#stop-session').disabled = true; $('#flush-audio').disabled = true; $('#audio-source').disabled = false; sourceButtons(); $('#live-dot').classList.remove('listening'); $('#audio-level').value = 0;
+  $('#check-sound').disabled = false; monitorOnly = false;
   status('Сессия остановлена · аудио больше не передаётся');
 }
 async function snapshot(reuse = false) {
@@ -111,7 +146,7 @@ async function snapshot(reuse = false) {
     $('#snapshot-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (error) { ui.showError(error.message); }
 }
-$('#start-session').onclick = start; $('#stop-session').onclick = stop;
+$('#start-session').onclick = () => start(); $('#check-sound').onclick = () => start(true); $('#stop-session').onclick = stop;
 $('#flush-audio').onclick = () => segments?.flush();
 $('#capture-screen').onclick = () => snapshot();
 $('#compact-snapshot').onclick = () => snapshot(true);
