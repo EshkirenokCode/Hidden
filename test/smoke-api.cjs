@@ -1,8 +1,27 @@
 module.exports = async (url, options) => {
+  if (url === 'https://api.groq.com/openai/v1/chat/completions') {
+    const body = JSON.parse(options.body);
+    if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] ||
+        body.model !== 'openai/gpt-oss-20b' || !body.stream || body.reasoning_effort !== 'low' ||
+        body.include_reasoning !== false || body.messages.some(message => typeof message.content !== 'string')) throw Error('Wrong Groq routing');
+    const answer = 'Groq smoke response: ' + body.messages[1].content.split('Вопрос:\n').at(-1);
+    return { ok: true, body: (async function* () {
+      const event = (delta, finish_reason = null) => 'data: ' + JSON.stringify({ choices: [{ delta, finish_reason }] }) + '\r\n\r\n';
+      const bytes = new TextEncoder().encode(event({ reasoning: 'must not show' }) + event({ content: answer }));
+      const split = bytes.findIndex(byte => byte > 127) + 1 || 18;
+      yield bytes.slice(0, split); yield bytes.slice(split);
+      await new Promise(resolve => setTimeout(resolve, 220));
+      options.signal.throwIfAborted();
+      yield new TextEncoder().encode(event({}, 'stop') + 'data: [DONE]\r\n\r\n');
+    })() };
+  }
   if (!url.startsWith('https://generativelanguage.googleapis.com/v1beta/interactions') || options.headers['x-goog-api-key'] !== 'smoke-test-not-a-real-key') throw Error('Wrong provider routing');
   const body = JSON.parse(options.body);
   let answer = 'Gemini smoke response' + (typeof body.input === 'string' ? ': ' + body.input.split('Вопрос:\n').at(-1) : '');
-  if(Array.isArray(body.input) && body.input.some(x=>x.type==='audio')) answer='Что такое DNS?';
+  if(Array.isArray(body.input) && body.input.some(x=>x.type==='audio')) {
+    if (body.model !== 'gemini-3.5-flash-lite') throw Error('Wrong fallback transcription model');
+    answer='Что такое DNS?';
+  }
   if (body.response_format) answer = JSON.stringify({ transcript: 'What is an index?', question: 'What is an index?', answer: 'An index speeds up reads.' });
   if (body.stream) {
     const events = [

@@ -1,10 +1,11 @@
 const { generateGemini } = require('./gemini.cjs');
+const { generateGroq, groqModel } = require('./groq.cjs');
 function validateRequest(request) {
-  if (request?.provider !== undefined && !['openai', 'gemini'].includes(request.provider)) throw new Error('Неизвестный провайдер.');
+  if (request?.provider !== undefined && !['openai', 'gemini', 'groq'].includes(request.provider)) throw new Error('Неизвестный провайдер.');
   if (!request || typeof request.question !== 'string' || !request.question.trim()) throw new Error('Введите вопрос.');
   if (request.question.length > 12000) throw new Error('Вопрос слишком длинный (до 12 000 символов).');
   if (typeof request.context !== 'string' || request.context.length > 30000) throw new Error('Контекст должен быть текстом до 30 000 символов.');
-  if (typeof request.model !== 'string' || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model)) throw new Error('Укажите корректное имя модели.');
+  if (request.provider === 'groq' ? request.model !== groqModel : typeof request.model !== 'string' || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model)) throw new Error('Укажите корректное имя модели.');
   if (!['brief', 'detailed'].includes(request.style)) throw new Error('Неизвестный формат ответа.');
   if (request.conversation !== undefined && (typeof request.conversation !== 'string' || request.conversation.length > 12000)) throw Error('Conversation is too long.');
   if (request.customPrompt !== undefined && (typeof request.customPrompt !== 'string' || request.customPrompt.length > 4000)) throw Error('Custom prompt is too long.');
@@ -15,6 +16,7 @@ function validateRequest(request) {
 async function generate(request, apiKey, fetchImpl = fetch, options = {}) {
   validateRequest(request);
   if (request.provider === 'gemini') return generateGemini(request, apiKey, fetchImpl, options);
+  if (request.provider === 'groq') return generateGroq(request, apiKey, fetchImpl, options);
   if (!apiKey) throw new Error('Добавьте OpenAI API key в настройках.');
   const response = await fetchImpl('https://api.openai.com/v1/responses', {
     method: 'POST',

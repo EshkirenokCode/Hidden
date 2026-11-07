@@ -83,14 +83,22 @@ $('#speech-vocabulary').value = String(read('hidden.vocabulary', '')).slice(0, 6
 $('#speech-vocabulary').oninput = () => save('hidden.vocabulary', $('#speech-vocabulary').value);
 $('#recognition-mode').value = ['auto','live','batch'].includes(read('hidden.recognitionMode','auto')) ? read('hidden.recognitionMode','auto') : 'auto';
 $('#recognition-mode').onchange = () => save('hidden.recognitionMode', $('#recognition-mode').value);
-$('#provider').value = ['openai', 'gemini'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
+const providerLabels = { gemini: 'Gemini', groq: 'Groq', openai: 'OpenAI' };
+const groqModel = 'openai/gpt-oss-20b';
+const geminiModel = () => String($('#provider').value === 'gemini' ? $('#model').value.trim() : read('ghost.model.gemini', 'gemini-3.5-flash-lite')) || 'gemini-3.5-flash-lite';
+$('#provider').value = ['openai', 'gemini', 'groq'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
 function loadProvider() {
   const provider = $('#provider').value;
-  $('#model').value = String(read(`ghost.model.${provider}`, provider === 'openai' ? read('ghost.model', '') : 'gemini-3.5-flash-lite'));
-  $('#key-label').textContent = provider === 'gemini' ? 'Gemini API key' : 'OpenAI API key';
+  $('#model').readOnly = provider === 'groq';
+  $('#model').value = provider === 'groq' ? groqModel : String(read(`ghost.model.${provider}`, provider === 'openai' ? read('ghost.model', '') : 'gemini-3.5-flash-lite'));
+  $('#key-label').textContent = `${providerLabels[provider]} API key`;
+  $('#test-key').textContent = `Проверить ${providerLabels[provider]}`;
+  $('#gemini-key-settings').hidden = provider === 'gemini';
+  $('#gemini-key').value = '';
+  $('#settings-error').textContent = '';
   $('#api-key').value = ''; $('#model').setAttribute('list', provider === 'gemini' ? 'model-options' : '');
 }
-function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
+function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), recognitionModel: geminiModel(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
 function showAnswer(answer, streaming = false) {
   const box = $('#answer'), scroll = box.scrollTop, following = box.scrollHeight - scroll - box.clientHeight < 32;
   currentAnswer = answer; $('#timing').textContent = ''; box.replaceChildren();
@@ -140,8 +148,11 @@ function presentResult(result, question, audio = false) {
   save('ghost.history', history); renderHistory();
 }
 async function updateStatus() {
-  const provider = $('#provider').value, connected = await window.ghost.keyStatus(provider);
-  if (provider === $('#provider').value) $('#connection').textContent = `${provider === 'gemini' ? 'Gemini' : 'OpenAI'} · ${connected ? 'ключ добавлен' : 'API не подключён'}`;
+  const provider = $('#provider').value;
+  const [connected, gemini] = await Promise.all([window.ghost.keyStatus(provider), window.ghost.keyStatus('gemini')]);
+  if (provider !== $('#provider').value) return;
+  $('#connection').textContent = `${providerLabels[provider]} · ${connected ? 'ключ добавлен' : 'API не подключён'}`;
+  $('#gemini-key-status').textContent = gemini ? 'Ключ Gemini добавлен' : 'Ключ Gemini не добавлен';
 }
 async function updatePrivacy() {
   const state = await window.ghost.privacyStatus();
@@ -162,26 +173,32 @@ $('#hide-window').onclick = () => window.ghost.hide();
 $('#context').oninput = () => { save('ghost.context', $('#context').value); $('#context-status').textContent = 'Сохранено на этом устройстве'; };
 $('#custom-prompt').oninput = () => save('ghost.prompt', $('#custom-prompt').value);
 $('#settings-open').onclick = () => $('#settings').showModal();
-$('#settings-close').onclick = () => { $('#api-key').value = ''; $('#settings').close(); };
-$('#settings').addEventListener('cancel', () => { $('#api-key').value = ''; });
+$('#settings-close').onclick = () => $('#settings').close();
+$('#settings').addEventListener('close', () => { $('#api-key').value = ''; $('#gemini-key').value = ''; });
+async function saveGeminiKey() {
+  const input = $('#provider').value === 'gemini' ? $('#api-key') : $('#gemini-key');
+  if (input.value.trim()) { await window.ghost.setKey('gemini', input.value); input.value = ''; }
+}
 async function saveSettings() {
-  if ($('#api-key').value.trim()) await window.ghost.setKey($('#provider').value, $('#api-key').value);
+  await saveGeminiKey();
+  if ($('#provider').value !== 'gemini' && $('#api-key').value.trim()) await window.ghost.setKey($('#provider').value, $('#api-key').value);
   $('#api-key').value = ''; save(`ghost.model.${$('#provider').value}`, $('#model').value.trim()); save('ghost.provider', $('#provider').value); await updateStatus();
 }
 $('#settings-form').onsubmit = async event => { event.preventDefault(); try { await saveSettings(); $('#settings').close(); } catch (error) { $('#settings-error').textContent = error.message; } };
 $('#test-key').onclick = async () => {
-  $('#test-key').disabled = true; $('#settings-error').textContent = 'Проверяем Gemini…';
-  try { if ($('#provider').value !== 'gemini') throw Error('Выберите Google Gemini.'); await saveSettings(); const result = await window.ghost.testKey($('#model').value.trim()); if (result.error) throw Error(result.error); $('#settings-error').textContent = `Подключение работает · ${(result.elapsedMs / 1000).toFixed(2)} с`; }
+  const { provider, model } = config();
+  $('#test-key').disabled = true; $('#settings-error').textContent = `Проверяем ${providerLabels[provider]}…`;
+  try { await saveSettings(); const result = await window.ghost.testKey(model, provider); if (result.error) throw Error(result.error); $('#settings-error').textContent = `Подключение работает · ${(result.elapsedMs / 1000).toFixed(2)} с`; }
   catch (error) { $('#settings-error').textContent = error.message; }
   finally { $('#test-key').disabled = false; }
 };
 $('#forget-key').onclick = async () => { await window.ghost.setKey($('#provider').value, ''); $('#api-key').value = ''; await updateStatus(); };
+$('#forget-gemini').onclick = async () => { await window.ghost.setKey('gemini', ''); $('#gemini-key').value = ''; await updateStatus(); };
 $('#test-live').onclick = async () => {
   const button = $('#test-live'); button.disabled = true;
   $('#settings-error').textContent = 'Проверяем доступ к Live · без передачи аудио…';
   try {
-    if ($('#provider').value !== 'gemini') throw Error('Для Live выберите Gemini.');
-    if ($('#api-key').value.trim()) { await window.ghost.setKey('gemini', $('#api-key').value.trim()); $('#api-key').value = ''; await updateStatus(); }
+    await saveGeminiKey(); await updateStatus();
     const result = await window.ghost.testLiveSpeech();
     $('#settings-error').textContent = result.error || `Live доступен · подключение ${(result.elapsedMs / 1000).toFixed(2)} с. Аудио не отправлялось.`;
   } catch (error) { $('#settings-error').textContent = error.message; }
@@ -205,6 +222,7 @@ async function ask(question) {
   try {
     await window.ghostSession?.cancelAnswer();
     const request = config();
+    if (pendingImage) { request.provider = 'gemini'; request.model = request.recognitionModel; }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
     question = question.trim() || 'Разбери задачу на снимке. Объясни решение и его сложность. Если текст неразборчив, скажи об этом.';
     $('#answer-question').textContent = question;

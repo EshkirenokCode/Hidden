@@ -7,7 +7,7 @@ const listen = (channel, callback) => {
 contextBridge.exposeInMainWorld('ghost', {
   keyStatus: provider => ipcRenderer.invoke('key:status', provider),
   setKey: (provider, key) => ipcRenderer.invoke('key:set', provider, key),
-  testKey: model => ipcRenderer.invoke('key:test', model),
+  testKey: (model, provider) => ipcRenderer.invoke('key:test', model, provider),
   privacyStatus: () => ipcRenderer.invoke('window:privacy'),
   hide: () => ipcRenderer.invoke('window:hide'),
   hideStop: () => ipcRenderer.invoke('window:hide-stop'),

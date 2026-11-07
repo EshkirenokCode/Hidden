@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { generate } = require('./provider.cjs');
 const { analyzeAudio, transcribeAudio, call } = require('./gemini.cjs');
-const keys = { openai: process.env.OPENAI_API_KEY || '', gemini: process.env.GEMINI_API_KEY || '' };
+const keys = { groq: process.env.GROQ_API_KEY || '', openai: process.env.OPENAI_API_KEY || '', gemini: process.env.GEMINI_API_KEY || '' };
 // Preserve the development profile when changing the product name.
 app.setPath('userData', path.join(app.getPath('appData'), 'ghost-workspace'));
 app.setName('Hidden');
@@ -18,7 +18,7 @@ const entry = pathToFileURL(path.join(__dirname, '../src/index.html')).href;
 const smoke = process.argv.includes('--smoke-test');
 if (smoke) {
   app.setPath('userData', path.join(require('node:os').tmpdir(), `ghost-smoke-${process.pid}`));
-  keys.openai = ''; keys.gemini = '';
+  keys.openai = ''; keys.gemini = ''; keys.groq = '';
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 }
 let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = null, captureMode = null;
@@ -46,7 +46,7 @@ function hideAndStop() {
 }
 const controllers = new Map();
 function providerName(value) {
-  if (!['openai', 'gemini'].includes(value)) throw Error('Неизвестный провайдер.');
+  if (!['openai', 'gemini', 'groq'].includes(value)) throw Error('Неизвестный провайдер.');
   return value;
 }
 function trusted(event) {
@@ -114,8 +114,11 @@ app.whenReady().then(() => {
     }
     keys[provider] = key.trim(); return Boolean(keys[provider]);
   });
-  ipcMain.handle('key:test', (event, model) => {
-    trusted(event);
+  ipcMain.handle('key:test', (event, model, provider = 'gemini') => {
+    trusted(event); providerName(provider);
+    if (provider !== 'gemini') return runTask('probe', async signal => ({
+      answer: await generate({ provider, model, question: 'Reply with OK only.', context: '', style: 'brief' }, keys[provider], fetchImpl, { signal })
+    }));
     if (typeof model !== 'string' || !/^[a-zA-Z0-9._:-]{1,100}$/.test(model)) return { error: 'Укажите модель.' };
     return runTask('probe', async signal => ({ answer: await call({ model, input: 'Reply with OK only.' }, keys.gemini, fetchImpl, { signal }) }));
   });
@@ -151,7 +154,7 @@ app.whenReady().then(() => {
     return runTask('answer', async signal => {
       const provider = providerName(request?.provider);
       let firstTokenMs = null; const started = performance.now();
-      const onDelta = provider === 'gemini' ? text => {
+      const onDelta = provider !== 'openai' ? text => {
         firstTokenMs ??= Math.round(performance.now() - started);
         if (!event.sender.isDestroyed()) event.sender.send('answer:delta', { text });
       } : undefined;
@@ -190,9 +193,10 @@ app.whenReady().then(() => {
   ipcMain.handle('speech:cancel', event => { trusted(event); controllers.get('speech-answer')?.abort(); });
   ipcMain.handle('speech:answer', (event, request) => {
     trusted(event); if (!mediaArmed || !Number.isSafeInteger(request?.id)) return { error: 'Аудиосессия остановлена.' };
+    const provider = providerName(request.provider);
     const previous = controllers.get('speech-answer'); previous?.abort(); controllers.delete('speech-answer');
     return runTask('speech-answer', async signal => {
-      return generateVoiceAnswer(request, keys.gemini, fetchImpl, { signal, onDelta: (text, firstTokenMs) => {
+      return generateVoiceAnswer(request, keys[provider], fetchImpl, { signal, onDelta: (text, firstTokenMs) => {
         if (!signal.aborted && mediaArmed && !event.sender.isDestroyed()) event.sender.send('speech:delta', { id: request.id, text, firstTokenMs });
       }, onNotice: message => {
         if (!signal.aborted && mediaArmed && !event.sender.isDestroyed()) event.sender.send('speech:notice', { id: request.id, message });

@@ -53,7 +53,7 @@ function metrics(values) {
     latestMetrics.transcriptionMs != null ? 'распознавание после речи ' + sec(latestMetrics.transcriptionMs) : '',
     latestMetrics.firstWordsMs != null ? 'первые слова после речи ' + sec(latestMetrics.firstWordsMs) : '',
     latestMetrics.totalMs != null ? 'весь ответ ' + sec(latestMetrics.totalMs) : '',
-    latestMetrics.waiting ? 'Gemini отвечает медленно · запрос продолжается' : ''
+    latestMetrics.waiting ? 'Ответ задерживается · запрос продолжается' : ''
   ].filter(Boolean).join(' · ');
 }
 export async function acceptTranscript(raw, endedAt, transcriptionMs) {
@@ -61,7 +61,7 @@ export async function acceptTranscript(raw, endedAt, transcriptionMs) {
   const result = turns.accept(raw);
   heard(result.text);
   const questionKey = (result.question || result.text).toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  if (questionKey && questionKey === inFlightQuestion) { status('Этот вопрос уже обрабатывается · ожидаем ответ Gemini'); return; }
+  if (questionKey && questionKey === inFlightQuestion) { status('Этот вопрос уже обрабатывается · ожидаем ответ'); return; }
   const entry = appendTranscript({ transcript: raw, question: result.question, answer: '' });
   if (result.corrections.length) {
     $('#speech-correction').hidden = false;
@@ -75,7 +75,6 @@ export async function acceptTranscript(raw, endedAt, transcriptionMs) {
   const id = ++voiceId, sessionId = epoch;
   inFlightQuestion = questionKey;
   ui.beginSpeechAnswer(id, result.question);
-  const slow = setTimeout(() => { if (id === voiceId && running && latestMetrics?.firstWordsMs == null) status('Gemini задерживается · ответ появится по мере получения'); }, 5000);
   try {
     const answer = await window.ghost.speechAnswer({ ...ui.config(), id, question: result.question });
     if (id !== voiceId || sessionId !== epoch || !running) return;
@@ -86,7 +85,7 @@ export async function acceptTranscript(raw, endedAt, transcriptionMs) {
     ui.presentResult(answer, result.question, true);
     status('Ответ готов · продолжаем слушать');
   } catch { if (id === voiceId && sessionId === epoch) { ui.endSpeechAnswer(id); ui.showError('Не удалось получить голосовой ответ. Повторите вопрос.'); } }
-  finally { clearTimeout(slow); if (id === voiceId) inFlightQuestion = ''; }
+  finally { if (id === voiceId) inFlightQuestion = ''; }
 }
 let voiceBeganAt = 0;
 window.ghost.onSpeechDelta(packet => {
@@ -124,7 +123,7 @@ async function drain() {
       const item = queue.shift(), sessionId = epoch;
       if (performance.now() - item.endedAt > 8000) { status('Ожидавшая фраза устарела · слушаем новый вопрос'); continue; }
       status('Распознаём фразу · ' + (queue.length ? 'следующая фраза ожидает' : 'без очереди'));
-      const result = await window.ghost.transcribeAudio({ model: sessionConfig.model, vocabulary: sessionVocabulary, audio: { data: base64(item.buffer), mimeType: 'audio/wav' } });
+      const result = await window.ghost.transcribeAudio({ model: sessionConfig.recognitionModel, vocabulary: sessionVocabulary, audio: { data: base64(item.buffer), mimeType: 'audio/wav' } });
       if (sessionId !== epoch || !running) continue;
       if (result.error) { ui.showError(result.error); await stop(); return; }
       // Answer generation runs independently; transcription of the next phrase does not wait for it.
@@ -170,8 +169,9 @@ async function start(testOnly = false) {
   try {
     const cfg = ui.config();
     sessionConfig = cfg; sessionVocabulary = vocabulary(cfg.vocabulary, cfg.context);
-    if (!testOnly && cfg.provider !== 'gemini') throw Error('Для аудиосессии выберите Gemini в настройках.');
-    if (!testOnly && !(await window.ghost.keyStatus('gemini'))) { $('#settings').showModal(); return; }
+    if (!testOnly && cfg.provider === 'openai') throw Error('Для голосовых ответов выберите Gemini или Groq.');
+    if (!testOnly && !(await window.ghost.keyStatus('gemini'))) { $('#settings').showModal(); throw Error('Добавьте ключ Gemini для распознавания речи.'); }
+    if (!testOnly && cfg.provider === 'groq' && !(await window.ghost.keyStatus('groq'))) { $('#settings').showModal(); throw Error('Добавьте ключ Groq для ответов.'); }
     if (!testOnly) { $('#heard-speech').hidden = false; $('#heard-speech').textContent = 'Открываем источник звука…'; }
     const kind = $('#audio-source').value;
     const diagnostics = await window.ghost.mediaDiagnostics();
@@ -238,7 +238,7 @@ async function stop() {
 }
 async function snapshot(reuse = false) {
   try {
-    if (ui.config().provider !== 'gemini') throw Error('Для анализа экрана выберите Gemini.');
+    if (!(await window.ghost.keyStatus('gemini'))) throw Error('Добавьте ключ Gemini для анализа экрана.');
     const source = reuse && selectedScreen ? selectedScreen : await chooseSource(); if (!source) return;
     selectedScreen = source;
     const result = await window.ghost.snapshot(source.id); if (result.error) { selectedScreen = null; throw Error(result.error); }
