@@ -9,7 +9,7 @@ module.exports = () => {
       sent = true;
       deliver({ serverContent: { interimInputTranscription: { text: 'Расскажите об особенностях языка' } } });
       setTimeout(() => deliver({ serverContent: { inputTranscription: { text: 'Расскажите об особенностях языка Голанд?' } } }), 30);
-      setTimeout(() => deliver({ serverContent: { inputTranscription: { text: 'И где его используют?' } } }), 780);
+      setTimeout(() => deliver({ serverContent: { inputTranscription: { text: 'И где его используют?' } } }), 2130);
     }
   };
   socket.close = () => { closed = true; socket.dispatchEvent(new Event('close')); };

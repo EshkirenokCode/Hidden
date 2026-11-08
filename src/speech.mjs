@@ -15,6 +15,19 @@ export function normalizeTerms(text) {
   });
   return { text: corrected, corrections };
 }
+// A final transcript can repeat words already delivered before a segmentation boundary.
+export function joinSpeech(previous, next) {
+  const left = previous.trim().split(/\s+/);
+  const right = next.trim().split(/\s+/);
+  const key = word => word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  for (let count = Math.min(left.length, right.length, 30); count >= 3; count--) {
+    if (left.slice(-count).every((word, i) => key(word) && key(word) === key(right[i]))) {
+      return [previous.trim(), ...right.slice(count)].join(' ');
+    }
+  }
+  return previous.trim() + ' ' + next.trim();
+}
+
 // Fast path handles explicit questions/requests without another model round trip.
 export class QuestionTurns {
   constructor() { this.pending = ''; this.last = ''; this.lastAt = 0; }

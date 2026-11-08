@@ -1,7 +1,7 @@
 module.exports = async ({ app, win, toggleWindow }) => {
   try {
     const result = await win.webContents.executeJavaScript(`(async () => {
-      const waitFor = async fn => { for (let i=0;i<100;i++) { if (fn()) return; await new Promise(r=>setTimeout(r,50)); } throw Error('Timed out: '+fn.toString()); };
+      const waitFor = async fn => { for (let i=0;i<160;i++) { if (fn()) return; await new Promise(r=>setTimeout(r,50)); } throw Error('Timed out: '+fn.toString()); };
       await waitFor(() => window.ghostSession);
       document.querySelector('#demo').click();
       if (!document.querySelector('#answer').textContent.includes('Демонстрация')) throw Error('Demo failed');
@@ -46,6 +46,10 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#sources .source-item').click();
       await waitFor(() => document.querySelector('#answer-question').textContent.includes('Smoke task window') && document.querySelector('#answer').textContent.includes('Gemini screen response') && !document.querySelector('#submit').disabled);
       if (document.querySelector('#question').value !== 'Separate typed draft') throw Error('Screen analysis cleared the typed draft');
+      document.querySelector('#question').value='Ответь на все семь вопросов';
+      document.querySelector('#question-form').requestSubmit();
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Gemini follow-up with screenshot') && !document.querySelector('#submit').disabled);
+      document.querySelector('#remove-snapshot').click();
       const invalid = await window.ghost.saveShortcuts({answer:'CommandOrControl+Shift+H',snapshot:'CommandOrControl+Shift+S'});
       if (!invalid.error) throw Error('Reserved shortcut accepted');
       document.querySelector('#settings-open').click();
@@ -139,7 +143,7 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#flush-audio').click();
       await waitFor(() => document.querySelector('#question').value==='Что такое DNS?');
       if (document.querySelector('#answer-question').textContent==='Что такое DNS?' || window.ghostSession.metrics()?.totalMs != null) throw Error('Manual mode requested an automatic answer');
-      await acceptTranscript('Как работает TCP?',performance.now(),0);
+      await acceptTranscript('Как работает TCP?',performance.now()+2100,0);
       await new Promise(resolve => setTimeout(resolve, 300));
       if (document.querySelector('#answer-question').textContent==='Как работает TCP?') throw Error('Manual mode answered a later question automatically');
       document.querySelector('#answer-heard').click();

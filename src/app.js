@@ -205,7 +205,7 @@ async function updatePrivacy() {
 function syncWindow(state) { pinned = state.pinned; $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; $('#click-through').setAttribute('aria-pressed', String(Boolean(state.clickThrough))); $('#click-through').textContent = state.clickThrough ? 'Клики сквозь · ⌘⇧M' : 'Сквозь клики'; }
 window.ghost.onWindowState(state => { syncWindow(state); syncShortcuts(state.shortcuts); });
 $('#hide-stop').onclick = () => window.ghost.hideStop();
-window.ghost.onStop(() => { window.ghostSession?.stop(); showError(''); });
+window.ghost.onStop(() => { window.ghostSession?.stop(); $('#remove-snapshot').click(); showError(''); });
 loadProvider();
 $('#provider').onchange = () => { if (window.ghostSession?.active()) window.ghostSession.stop(); loadProvider(); save('ghost.provider', $('#provider').value); updateStatus(); };
 $('#hide-window').onclick = () => window.ghost.hide();
@@ -279,7 +279,7 @@ window.ghost.onDelta(({ text }) => {
 });
 $('#cancel-answer').onclick = () => window.ghost.cancel();
 $('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
-const screenQuestion = 'Найди главный вопрос или задание на снимке. Коротко сформулируй, что спрашивают, и сразу дай ответ. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
+const screenQuestion = 'Найди все читаемые вопросы и задания на снимке. Ответь на каждый в исходном порядке, пронумеруй ответы и кратко повтори формулировку каждого вопроса. Если часть снимка не читается, укажи, какие пункты не удалось разобрать. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
 async function ask(question, { image = pendingImage, preserveDraft = false, title } = {}) {
   if (busy) return;
   if (!question.trim() && !image) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }

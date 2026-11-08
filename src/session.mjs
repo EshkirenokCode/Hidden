@@ -1,12 +1,15 @@
 import { SpeechSegments } from './audio.mjs';
 import { captureError } from './capture.mjs';
-import { PcmPackets, QuestionTurns, vocabulary } from './speech.mjs';
+import { joinSpeech, PcmPackets, QuestionTurns, vocabulary } from './speech.mjs';
 const $ = s => document.querySelector(s);
 let running = false, starting = false, stream, audioContext, worklet, input, segments, queue = [], processing = false, epoch = 0, timer, started = 0;
 let transcript = [], answeredTurns = [], lastQuestion = '', selectedScreen = null;
 let assembling, settleTimer, dispatchTimer, lastInterimAt = 0;
+let preamble = [];
+let manualRequestTimer;
 const readyQuestions = [];
-const questionPauseMs = 1500;
+const questionPauseMs = 2800;
+const speechPauseMs = 1350;
 let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, lastVoiceAt = 0, speechStartedAt = 0;
 let turns = new QuestionTurns(), sessionConfig, sessionVocabulary = [];
 let latestMetrics = null;
@@ -15,6 +18,7 @@ const answerMode = $('#answer-mode');
 answerMode.value = localStorage.getItem('hidden.answerMode') === 'manual' ? 'manual' : 'auto';
 answerMode.onchange = () => {
   localStorage.setItem('hidden.answerMode', answerMode.value);
+  clearManualRequest();
   if (answerMode.value === 'manual') {
     readyQuestions.length = 0;
     clearTimeout(dispatchTimer);
@@ -117,6 +121,9 @@ function finishQuestion() {
   if (answerMode.value === 'auto') {
     readyQuestions.push(question);
     dispatchQuestions();
+  } else if (manualRequestTimer) {
+    clearManualRequest();
+    ui.ask(question.question, { image: null });
   } else {
     status('Вопрос готов · нажмите «Ответить на услышанное»');
   }
@@ -142,6 +149,9 @@ export function acceptTranscript(raw, endedAt, transcriptionMs, beganAt = endedA
     $('#speech-correction').textContent = 'Понял как: ' + result.text + ' · ' + result.corrections.join(', ');
   } else $('#speech-correction').hidden = true;
   if (!result.question && (!assembling || turns.pending || beganAt - assembling.endedAt > questionPauseMs)) {
+    if (!assembling && !turns.pending) {
+      preamble = [...preamble.filter(part => endedAt - part.endedAt < 8000), { text: result.text, endedAt }].slice(-3);
+    }
     if (assembling && turns.pending) scheduleQuestion();
     status('Фраза услышана · ожидаем вопрос или его продолжение');
     return;
@@ -151,7 +161,10 @@ export function acceptTranscript(raw, endedAt, transcriptionMs, beganAt = endedA
   if (assembling && beganAt - assembling.endedAt > questionPauseMs) {
     finishQuestion();
   }
-  const question = assembling ? (assembling.question + ' ' + fragment).slice(0, 12000) : fragment;
+  const lead = preamble.filter(part => beganAt - part.endedAt <= questionPauseMs + 1800).map(part => part.text).join(' ').slice(-1800);
+  const prefix = assembling?.question || lead;
+  const question = prefix ? joinSpeech(prefix, fragment).slice(0, 12000) : fragment;
+  preamble = [];
   assembling = { question, lastFragment: fragment, endedAt, transcriptionMs, row };
   setLastQuestion(question);
   ui.receiveQuestion(question);
@@ -199,13 +212,13 @@ export function consumeAudioFrame(frame, rate) {
   if (!running) return;
   if (!segments || frameRate !== rate) {
     frameRate = rate;
-    segments = new SpeechSegments(rate, enqueue, { silenceMs: 650 });
+    segments = new SpeechSegments(rate, enqueue, { silenceMs: speechPauseMs });
     pcmPackets = new PcmPackets(rate, buffer => { if (running && live && !monitorOnly) window.ghost.sendSpeechPcm(base64(buffer)); });
   }
   const rms = segments.push(frame); updateMeter(rms);
   if (rms > segments.threshold) {
     const now = performance.now();
-    if (!lastVoiceAt || now - lastVoiceAt >= questionPauseMs) speechStartedAt = now;
+    if (!lastVoiceAt || now - lastVoiceAt >= speechPauseMs) speechStartedAt = now;
     lastVoiceAt = now;
   }
   if (live && !monitorOnly) pcmPackets.push(frame);
@@ -329,7 +342,9 @@ async function stop() {
   if ($('#source-picker').open) { cancelPicker(); $('#source-picker').close(); }
   clearTimeout(settleTimer);
   clearTimeout(dispatchTimer);
+  clearManualRequest();
   assembling = null;
+  preamble = [];
   readyQuestions.length = 0;
   running = false; epoch++; voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); live = false; pcmPackets = null; frameRate = 0; queue = []; clearInterval(timer);
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); }); stream = null;
@@ -353,10 +368,10 @@ async function snapshot({ reuse = false, analyze = true } = {}) {
     const result = await window.ghost.snapshot(source.id); if (result.error) { selectedScreen = null; throw Error(result.error); }
     if (captureEpoch !== epoch || $('#settings').open) return;
     selectedScreen = source;
+    ui.setImage(result.image, result.name);
     if (analyze) {
       await ui.ask('', { image: result.image, preserveDraft: true, title: 'Задача с экрана · ' + result.name });
     } else {
-      ui.setImage(result.image, result.name);
       $('#snapshot-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   } catch (error) { ui.showError(error.message); }
@@ -367,10 +382,23 @@ $('#flush-audio').onclick = () => { const emitted = segments?.flush(); if (live 
 $('#capture-screen').onclick = () => snapshot();
 $('#preview-screen').onclick = () => snapshot({ analyze: false });
 $('#compact-snapshot').onclick = () => snapshot({ reuse: true });
+function clearManualRequest() {
+  clearTimeout(manualRequestTimer);
+  manualRequestTimer = undefined;
+}
 function answerLast() {
   if ($('#settings').open || $('#source-picker').open) return;
+  if (ui.busy() || manualRequestTimer) return;
+  if (running && answerMode.value === 'manual' && (lastInterimAt || processing || queue.length || turns.pending)) {
+    manualRequestTimer = setTimeout(() => {
+      clearManualRequest();
+      status('Не удалось завершить распознавание · повторите команду после фразы');
+    }, 15000);
+    status('Заканчиваем распознавание · ответ появится после фразы');
+    $('#flush-audio').click();
+    return;
+  }
   if (!lastQuestion) { ui.showError('Вопрос ещё не распознан. Начните слушать.'); return; }
-  if (ui.busy()) return;
   if (assembling && answerMode.value === 'manual') {
     clearTimeout(settleTimer);
     finishQuestion();

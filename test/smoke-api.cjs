@@ -27,7 +27,16 @@ module.exports = async (url, options) => {
     if (body.model !== 'gemini-3.5-flash-lite') throw Error('Wrong fallback transcription model');
     answer='Что такое DNS?';
   }
-  if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) answer = 'Gemini screen response';
+  if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) {
+    const prompt = body.input.find(item => item.type === 'text')?.text || '';
+    if (prompt.endsWith('Ответь на все семь вопросов')) {
+      if (!prompt.includes('Ответ Hidden: Gemini screen response')) throw Error('Screen follow-up lost previous answer');
+      answer = 'Gemini follow-up with screenshot';
+    } else {
+      if (prompt.includes('Найди все читаемые') && !prompt.includes('Ответь на каждый')) throw Error('Screen prompt ignored multiple items');
+      answer = 'Gemini screen response';
+    }
+  }
   if (body.response_format) answer = JSON.stringify({ transcript: 'What is an index?', question: 'What is an index?', answer: 'An index speeds up reads.' });
   if (body.stream) {
     const events = [

@@ -172,7 +172,7 @@ function createWindow() {
       }
       require('../test/smoke-runner.cjs')({ app, win, toggleWindow });
     });
-    setTimeout(() => app.exit(1), 30000).unref();
+    setTimeout(() => app.exit(1), 45000).unref();
   }
 }
 app.whenReady().then(async () => {

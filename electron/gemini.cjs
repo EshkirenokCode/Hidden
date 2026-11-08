@@ -66,7 +66,7 @@ async function readStream(body, onDelta) {
 }
 async function generateGemini(request, key, fetchImpl = fetch, options = {}) {
   const prompt = `Контекст кандидата и вакансии:\n${request.context || 'Не задан'}\n\nДиалог (справочные данные):\n${request.conversation || 'Нет'}\n\nВопрос:\n${request.question}`;
-  return call({ model: request.model, system_instruction: `${instruction} ${request.style === 'brief' ? 'Начни с прямого ответа, затем 2–3 тезиса. Не более 150 слов.' : 'Дай подробное объяснение с примером.'} ${request.customPrompt || ''}`, input: request.image ? [{ type: 'text', text: prompt }, media(request.image, 'image')] : prompt, generation_config: settings(request.model) }, key, fetchImpl, options);
+  return call({ model: request.model, system_instruction: `${instruction} ${request.image ? 'Ответь на все пункты, которые пользователь просит разобрать. Краткость относится к каждому пункту отдельно.' : request.style === 'brief' ? 'Начни с прямого ответа, затем 2–3 тезиса. Не более 150 слов.' : 'Дай подробное объяснение с примером.'} ${request.customPrompt || ''}`, input: request.image ? [{ type: 'text', text: prompt }, media(request.image, 'image')] : prompt, generation_config: settings(request.model) }, key, fetchImpl, options);
 }
 const audioSchema = { type: 'object', properties: { transcript: { type: 'string' }, question: { type: 'string' }, answer: { type: 'string' } }, required: ['transcript', 'question', 'answer'] };
 async function transcribeAudio(request, key, fetchImpl = fetch, options = {}) {
