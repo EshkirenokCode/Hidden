@@ -193,7 +193,7 @@ async function updatePrivacy() {
   syncWindow(state);
   $('#privacy-status').textContent = state.platform === 'darwin' ? 'Защита окна: ограничена на macOS · весь экран может показать помощника' : state.protectionRequested ? 'Защита окна включена · результат у зрителя не проверен' : 'Защита окна от захвата не поддерживается';
   $('#privacy').textContent = state.platform === 'darwin' ? 'macOS: защита включена, но ScreenCaptureKit может захватить окно. Универсальная невидимость не гарантируется. Передавайте отдельное окно другого приложения и проверьте результат у зрителя.' : state.protectionRequested ? 'Защита от захвата включена. Проверьте результат у зрителя.' : 'На этой ОС исключение из захвата не поддерживается.';
-  $('#hide-window').textContent = state.shortcutRegistered ? 'Скрыть / вернуть · ⌘/Ctrl + Shift + H' : 'Скрыть окно · вернуть через значок приложения';
+  $('#hide-window').textContent = state.shortcutRegistered ? 'Скрыть / вернуть · ⌘/Ctrl + Shift + H' : state.platform === 'darwin' ? 'Скрыть окно · вернуть через строку меню' : 'Скрыть окно';
   syncShortcuts(state.shortcuts);
 }
 function syncWindow(state) { pinned = state.pinned; $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; $('#click-through').setAttribute('aria-pressed', String(Boolean(state.clickThrough))); $('#click-through').textContent = state.clickThrough ? 'Клики сквозь · ⌘⇧M' : 'Сквозь клики'; }

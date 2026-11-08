@@ -11,6 +11,7 @@ const path = require('node:path');
     osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false,
       optionsForFile: () => ({ hardenedRuntime: false }) },
     ignore: [/^\/(artifacts|dist|docs|tools|test|scripts|native|\.git)(\/|$)/, /^\/\.env(?:\.|$)/, /\.(key|pem|p12)$/],
+    extendInfo: { LSUIElement: true },
     usageDescription: {
       Microphone: 'Hidden uses the microphone only when you start an audio session.',
       AudioCapture: 'Hidden uses system audio only when you select it and start a session.'

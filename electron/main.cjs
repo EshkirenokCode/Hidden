@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, dialog, systemPreferences, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, Menu, Tray, dialog, systemPreferences, screen } = require('electron');
 const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
@@ -21,6 +21,8 @@ if (smoke) {
   keys.openai = ''; keys.gemini = ''; keys.groq = '';
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 }
+const menuBarMode = process.platform === 'darwin';
+let tray, quitting = false;
 let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = null, captureMode = null;
 let lastCaptureDenial = '';
 const nativePicker = process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 15 && !smoke;
@@ -106,6 +108,18 @@ function providerName(value) {
 function trusted(event) {
   if (event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== entry) throw Error('Недопустимый источник запроса.');
 }
+function createTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'assets/hiddenTrayTemplate@2x.png'));
+  icon.setTemplateImage(true);
+  tray = new Tray(icon);
+  tray.setToolTip('Hidden');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Показать / скрыть Hidden', click: toggleWindow },
+    { label: 'Остановить и скрыть', click: hideAndStop },
+    { type: 'separator' },
+    { label: 'Выйти из Hidden', click: () => app.quit() }
+  ]));
+}
 function toggleWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   setClickThrough(false);
@@ -136,17 +150,37 @@ function createWindow() {
   mainWindow = win;
   normalBounds = null;
   if (['darwin', 'win32'].includes(process.platform)) win.setContentProtection(true);
-  win.once('ready-to-show', () => win.show());
+  if (!menuBarMode) win.once('ready-to-show', () => win.show());
+  if (menuBarMode) win.on('close', event => {
+    if (quitting) return;
+    event.preventDefault();
+    hideAndStop();
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', e => e.preventDefault());
   win.on('closed', () => { nativeAudio?.stop(); stopSpeech(); mediaArmed = false; captureMode = null; displaySource = null; for (const c of controllers.values()) c.abort(); });
   win.loadURL(entry);
   if (smoke) {
-    win.webContents.once('did-finish-load', () => require('../test/smoke-runner.cjs')({ app, win, toggleWindow }));
+    win.webContents.once('did-finish-load', () => {
+      if (menuBarMode) {
+        if (!tray || tray.isDestroyed() || win.isVisible() || app.dock.isVisible()) {
+          console.error('Hidden must start in the menu bar with the window and Dock icon hidden.');
+          app.exit(1);
+          return;
+        }
+        toggleWindow();
+      }
+      require('../test/smoke-runner.cjs')({ app, win, toggleWindow });
+    });
     setTimeout(() => app.exit(1), 30000).unref();
   }
 }
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (menuBarMode) {
+    app.setActivationPolicy('accessory');
+    await app.dock.hide();
+    createTray();
+  }
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
     const allowed = allowMediaRequest({ trusted: wc === mainWindow?.webContents && wc?.getURL() === entry && mediaArmed, mode: captureMode, permission, mediaTypes: details.mediaTypes || [], mainFrame: details.isMainFrame !== false && (!details.requestingUrl || details.requestingUrl === entry) });
     if (!allowed && wc === mainWindow?.webContents) lastCaptureDenial = `Hidden отклонил запрос ${permission} (режим ${captureMode || 'не запущен'}).`;
@@ -320,8 +354,8 @@ app.whenReady().then(() => {
     try { return changeShortcuts(request); } catch (error) { return fail(error); }
   });
   createWindow();
-  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); else { setClickThrough(false); mainWindow.show(); mainWindow.focus(); } });
+
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
-app.on('before-quit', () => { nativeAudio?.stop(); stopSpeech(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); tray?.destroy(); });
+app.on('before-quit', () => { quitting = true; nativeAudio?.stop(); stopSpeech(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
