@@ -8,6 +8,17 @@ let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, l
 let turns = new QuestionTurns(), sessionConfig, sessionVocabulary = [];
 let latestMetrics = null;
 let inFlightQuestion = '';
+const autoAnswer = $('#auto-answer');
+autoAnswer.checked = localStorage.getItem('hidden.answerMode') !== 'manual';
+autoAnswer.onchange = () => {
+  localStorage.setItem('hidden.answerMode', autoAnswer.checked ? 'auto' : 'manual');
+  if (running && !monitorOnly) status(autoAnswer.checked ? 'Автоответ включён' : 'Ручной режим · отвечаю по команде');
+};
+function setLastQuestion(question) {
+  lastQuestion = question;
+  for (const id of ['answer-last', 'answer-heard']) $('#' + id).disabled = !question;
+}
+setLastQuestion('');
 const storedSource = localStorage.getItem('hidden.audioSource');
 if (storedSource === 'system') $('#audio-source').value = 'system';
 function sourceButtons() { for (const name of ['microphone','system']) { $('#source-' + name).setAttribute('aria-pressed', String($('#audio-source').value === name)); $('#source-' + name).disabled = $('#audio-source').disabled; } }
@@ -31,13 +42,13 @@ const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
 function conversation() { return transcript.map(x => `${x.text}${x.question ? `\nВопрос: ${x.question}` : ''}${x.answer ? `\nУже дан ответ: ${x.answer}` : ''}`).join('\n').slice(-12000); }
 function appendTranscript(item) {
-  if (item.question) { lastQuestion = item.question; ui.receiveQuestion(item.question); }
+  if (item.question) { setLastQuestion(item.question); ui.receiveQuestion(item.question); }
   if (!item.transcript) return;
   const stored = { text: item.transcript, question: item.question, answer: item.answer }; transcript.push(stored); transcript = transcript.slice(-40);
   const row = document.createElement('div'); row.className = 'transcript-row';
   const time = document.createElement('span'); time.className = 'muted small'; time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const text = document.createElement('p'); text.textContent = item.transcript; row.append(time, text);
-  if (item.question) { const button = document.createElement('button'); button.className = 'text-button'; button.textContent = `↗ ${item.question}`; button.onclick = () => ui.ask(item.question); row.append(button); }
+  if (item.question) { const button = document.createElement('button'); button.className = 'text-button'; button.textContent = `↗ ${item.question}`; button.onclick = () => ui.ask(item.question, { image: null }); row.append(button); }
   if (!$('#transcript .transcript-row')) $('#transcript').replaceChildren();
   $('#transcript').append(row); while ($('#transcript').children.length > 40) $('#transcript').firstChild.remove(); $('#transcript').scrollTop = $('#transcript').scrollHeight;
   return stored;
@@ -69,8 +80,8 @@ export async function acceptTranscript(raw, endedAt, transcriptionMs) {
   } else $('#speech-correction').hidden = true;
   if (!result.question) { status('Фраза услышана · ожидаем вопрос или его продолжение'); return; }
   metrics({ mode: live ? 'Live' : 'По фразам', transcriptionMs, firstWordsMs: null, totalMs: null, waiting: false });
+  if (!autoAnswer.checked || ui.busy()) { status('Вопрос распознан · готов к ответу по команде'); return; }
   status('Вопрос понят · готовим ответ');
-  if (!$('#auto-answer').checked) { status('Вопрос распознан · автоответ выключен'); return; }
   voiceBeganAt = endedAt;
   const id = ++voiceId, sessionId = epoch;
   inFlightQuestion = questionKey;
@@ -144,9 +155,10 @@ async function chooseSource() {
   if (pickResolve) return null;
   $('#sources').textContent = 'Получаем окна…'; $('#source-picker').showModal();
   const choice = new Promise(resolve => { pickResolve = resolve; });
+  const request = pickResolve;
   try {
     const result = await window.ghost.sources();
-    if (!pickResolve) return null;
+    if (pickResolve !== request) return choice;
     if (result.error) throw Error(result.error);
     $('#sources').replaceChildren();
     if (!result.sources.length) $('#sources').textContent = 'Нет доступных окон. Разрешите запись экрана в настройках ОС.';
@@ -157,7 +169,7 @@ async function chooseSource() {
       button.onclick = () => { const resolve = pickResolve; pickResolve = null; $('#source-picker').close(); resolve(source); };
       $('#sources').append(button);
     }
-  } catch (error) { $('#sources').textContent = error.message; }
+  } catch (error) { if (pickResolve === request) $('#sources').textContent = error.message; }
   return choice;
 }
 function cancelPicker() { if (pickResolve) { pickResolve(null); pickResolve = null; } }
@@ -226,6 +238,7 @@ async function start(testOnly = false) {
   finally { starting = false; $('#start-session').disabled = running; if (!running) { stream?.getTracks().forEach(t => t.stop()); if (audioContext && audioContext.state !== 'closed') await audioContext.close(); await window.ghost.armMedia(false); } }
 }
 async function stop() {
+  if ($('#source-picker').open) { cancelPicker(); $('#source-picker').close(); }
   running = false; epoch++; voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); live = false; pcmPackets = null; frameRate = 0; queue = []; clearInterval(timer);
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); }); stream = null;
   if (worklet) { worklet.port.onmessage = null; worklet.disconnect(); } input?.disconnect();
@@ -236,23 +249,41 @@ async function stop() {
   $('#check-sound').disabled = false; monitorOnly = false;
   status('Сессия остановлена · аудио больше не передаётся');
 }
-async function snapshot(reuse = false) {
+let capturingScreen = false;
+async function snapshot({ reuse = false, analyze = true } = {}) {
+  if (capturingScreen || ui.busy() || $('#settings').open) return;
+  capturingScreen = true;
+  const captureEpoch = epoch;
   try {
     if (!(await window.ghost.keyStatus('gemini'))) throw Error('Добавьте ключ Gemini для анализа экрана.');
     const source = reuse && selectedScreen ? selectedScreen : await chooseSource(); if (!source) return;
-    selectedScreen = source;
+    if (captureEpoch !== epoch || $('#settings').open) return;
     const result = await window.ghost.snapshot(source.id); if (result.error) { selectedScreen = null; throw Error(result.error); }
-    ui.setImage(result.image, result.name);
-    $('#snapshot-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (captureEpoch !== epoch || $('#settings').open) return;
+    selectedScreen = source;
+    if (analyze) {
+      await ui.ask('', { image: result.image, preserveDraft: true, title: 'Задача с экрана · ' + result.name });
+    } else {
+      ui.setImage(result.image, result.name);
+      $('#snapshot-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   } catch (error) { ui.showError(error.message); }
+  finally { capturingScreen = false; }
 }
 $('#start-session').onclick = () => start(); $('#check-sound').onclick = () => start(true); $('#stop-session').onclick = stop;
 $('#flush-audio').onclick = () => { const emitted = segments?.flush(); if (live && !emitted) { pcmPackets?.flush(); window.ghost.endSpeechTurn(); } };
 $('#capture-screen').onclick = () => snapshot();
-$('#compact-snapshot').onclick = () => snapshot(true);
-$('#answer-last').onclick = () => lastQuestion ? ui.ask(lastQuestion) : ui.showError('Вопрос ещё не распознан. Начните сессию или введите вопрос.');
-$('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; lastQuestion = ''; $('#transcript').textContent = 'Диалог очищен.'; };
-window.ghost.onAnswerLast(() => $('#answer-last').click()); window.ghost.onSnapshot(() => snapshot(true));
+$('#preview-screen').onclick = () => snapshot({ analyze: false });
+$('#compact-snapshot').onclick = () => snapshot({ reuse: true });
+function answerLast() {
+  if ($('#settings').open || $('#source-picker').open) return;
+  if (!lastQuestion) { ui.showError('Вопрос ещё не распознан. Начните слушать.'); return; }
+  return ui.ask(lastQuestion, { image: null });
+}
+$('#answer-last').onclick = answerLast;
+$('#answer-heard').onclick = answerLast;
+$('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; setLastQuestion(''); $('#transcript').textContent = 'Диалог очищен.'; };
+window.ghost.onAnswerLast(answerLast); window.ghost.onSnapshot(() => snapshot({ reuse: true }));
 window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics,
   cancelAnswer() { voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); return window.ghost.cancelSpeechAnswer(); }
 };

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, dialog, systemPreferences, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, dialog, systemPreferences, screen } = require('electron');
 const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
@@ -29,6 +29,60 @@ let normalBounds;
 let compactPinned = false;
 let clickThrough = false;
 const shortcuts = {};
+const shortcutActions = {
+  answer: () => mainWindow?.webContents.send('session:answer-last'),
+  snapshot: () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.webContents.send('session:snapshot');
+  }
+};
+const customDefaults = { answer: 'CommandOrControl+Shift+Space', snapshot: 'CommandOrControl+Shift+S' };
+const shortcutFile = () => path.join(app.getPath('userData'), 'shortcuts.json');
+function validChord(chord) {
+  return typeof chord === 'string' &&
+    /^(?:CommandOrControl(?:\+Alt)?(?:\+Shift)?|Alt(?:\+Shift)?)\+(?:[A-Z0-9]|F(?:[1-9]|1[0-2])|Space|Enter|Left|Right|Up|Down)$/.test(chord);
+}
+function registerShortcut(name, chord, action) {
+  let registered = false;
+  try { registered = globalShortcut.register(chord, action); } catch {}
+  shortcuts[name] = { chord, registered };
+}
+function changeShortcuts(request) {
+  const names = Object.keys(shortcutActions);
+  const chords = names.map(name => request?.[name]);
+  if (!chords.every(validChord)) throw Error('Укажите сочетания с Cmd/Ctrl или Alt.');
+  const reserved = Object.keys(shortcuts).filter(name => !names.includes(name)).map(name => shortcuts[name].chord);
+  if (new Set(chords).size !== chords.length || chords.some(chord => reserved.includes(chord))) {
+    throw Error('Сочетания должны различаться и не совпадать с другими действиями Hidden.');
+  }
+  const changed = names.filter(name => request[name] !== shortcuts[name].chord || !shortcuts[name].registered);
+  const previous = Object.fromEntries(changed.map(name => [name, shortcuts[name]]));
+  function unregister(name) {
+    if (shortcuts[name].registered) globalShortcut.unregister(shortcuts[name].chord);
+  }
+  for (const name of changed) unregister(name);
+  try {
+    for (const name of changed) {
+      registerShortcut(name, request[name], shortcutActions[name]);
+      if (!shortcuts[name].registered) throw Error(`Сочетание ${request[name]} занято системой или другим приложением.`);
+    }
+    if (changed.length) {
+      const temp = shortcutFile() + '.tmp';
+      fs.writeFileSync(temp, JSON.stringify(Object.fromEntries(names.map(name => [name, request[name]]))));
+      fs.renameSync(temp, shortcutFile());
+    }
+  } catch (error) {
+    for (const name of changed) {
+      if (shortcuts[name] !== previous[name]) unregister(name);
+    }
+    for (const name of changed) registerShortcut(name, previous[name].chord, shortcutActions[name]);
+    publishWindowState();
+    throw error;
+  }
+  publishWindowState();
+  return windowState();
+}
 const nativeAudioPath = app.isPackaged ? path.join(process.resourcesPath, 'hidden-system-audio') : path.join(__dirname, '../native/bin/hidden-system-audio');
 let nativeAudio;
 let liveTranscriber;
@@ -70,6 +124,10 @@ async function runTask(type, work) {
   finally { if (controllers.get(type) === controller) controllers.delete(type); }
 }
 async function sources(thumbnailSize = { width: 320, height: 180 }) {
+  if (smoke) {
+    const thumbnail = nativeImage.createFromBitmap(Buffer.alloc(16 * 16 * 4, 255), { width: 16, height: 16 });
+    return [{ id: 'window:1:0', name: 'Smoke task window', thumbnail }];
+  }
   const list = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize });
   return list.filter(s => s.name !== 'Hidden' && s.name !== 'Ghost · Interview workspace' && !s.name.startsWith('Ghost ·'));
 }
@@ -245,15 +303,22 @@ app.whenReady().then(() => {
     if (fs.statSync(result.filePaths[0]).size > 120000) return { error: 'Файл слишком большой.' };
     return { text: fs.readFileSync(result.filePaths[0], 'utf8').slice(0, 30000) };
   });
-  const register = (name, chord, action) => { shortcuts[name] = { chord, registered: globalShortcut.register(chord, action) }; };
+  const register = registerShortcut;
   register('hide', 'CommandOrControl+Shift+H', toggleWindow);
   shortcutRegistered = shortcuts.hide.registered;
   register('stop', 'CommandOrControl+Shift+Escape', hideAndStop);
-  register('answer', 'CommandOrControl+Shift+Space', () => mainWindow?.webContents.send('session:answer-last'));
-  register('snapshot', 'CommandOrControl+Shift+S', () => mainWindow?.webContents.send('session:snapshot'));
   register('previous', 'CommandOrControl+Shift+Left', () => mainWindow?.webContents.send('answer:navigate', 1));
   register('next', 'CommandOrControl+Shift+Right', () => mainWindow?.webContents.send('answer:navigate', -1));
   register('mouse', 'CommandOrControl+Shift+M', () => setClickThrough(!clickThrough));
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(shortcutFile(), 'utf8')); } catch {}
+  for (const [name, action] of Object.entries(shortcutActions)) {
+    register(name, validChord(saved?.[name]) ? saved[name] : customDefaults[name], action);
+  }
+  ipcMain.handle('shortcut:save', (event, request) => {
+    trusted(event);
+    try { return changeShortcuts(request); } catch (error) { return fail(error); }
+  });
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); else { setClickThrough(false); mainWindow.show(); mainWindow.focus(); } });
 });

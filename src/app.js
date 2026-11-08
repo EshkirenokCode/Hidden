@@ -154,17 +154,50 @@ async function updateStatus() {
   $('#connection').textContent = `${providerLabels[provider]} · ${connected ? 'ключ добавлен' : 'API не подключён'}`;
   $('#gemini-key-status').textContent = gemini ? 'Ключ Gemini добавлен' : 'Ключ Gemini не добавлен';
 }
+const shortcutFields = ['answer', 'snapshot'];
+let activeChords = {};
+function showShortcutFields() {
+  for (const name of shortcutFields) $('#shortcut-' + name).value = activeChords[name] || '';
+}
+for (const name of shortcutFields) {
+  $('#shortcut-' + name).onkeydown = event => {
+    if (['Tab', 'Escape'].includes(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey) return;
+    event.preventDefault();
+    if (event.isComposing || (event.metaKey && event.ctrlKey) ||
+        (navigator.platform.includes('Mac') ? event.ctrlKey : event.metaKey)) return;
+    const key = /^(Key[A-Z]|Digit[0-9]|Arrow(?:Left|Right|Up|Down))$/.test(event.code)
+      ? event.code.replace(/^(Key|Digit|Arrow)/, '') : event.code;
+    if (!/^(?:[A-Z0-9]|F(?:[1-9]|1[0-2])|Space|Enter|Left|Right|Up|Down)$/.test(key)) return;
+    const command = event.metaKey || event.ctrlKey;
+    if (!command && !event.altKey) return;
+    event.currentTarget.value = [command && 'CommandOrControl', event.altKey && 'Alt', event.shiftKey && 'Shift', key].filter(Boolean).join('+');
+  };
+}
+$('#shortcut-defaults').onclick = () => {
+  $('#shortcut-answer').value = 'CommandOrControl+Shift+Space';
+  $('#shortcut-snapshot').value = 'CommandOrControl+Shift+S';
+};
+function syncShortcuts(shortcuts) {
+  if (!shortcuts?.answer || !shortcuts.snapshot) return;
+  activeChords = Object.fromEntries(shortcutFields.map(name => [name, shortcuts[name].chord]));
+  const label = name => shortcuts[name].registered ? ' · ' + shortcuts[name].chord.replace('CommandOrControl', navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl') : '';
+  $('#answer-last').textContent = 'Ответить на последний' + label('answer');
+  $('#answer-heard').title = 'Ответить на услышанное' + label('answer');
+  $('#compact-snapshot').title = 'Ответ с экрана' + label('snapshot');
+  const missing = Object.values(shortcuts).filter(x => !x.registered).map(x => x.chord.replace('CommandOrControl', 'Cmd/Ctrl'));
+  $('#shortcut-warning').hidden = !missing.length;
+  $('#shortcut-warning').textContent = `Сочетания заняты: ${missing.join(', ')}. Используйте кнопки в окне.`;
+}
 async function updatePrivacy() {
   const state = await window.ghost.privacyStatus();
   syncWindow(state);
   $('#privacy-status').textContent = state.platform === 'darwin' ? 'Защита окна: ограничена на macOS · весь экран может показать помощника' : state.protectionRequested ? 'Защита окна включена · результат у зрителя не проверен' : 'Защита окна от захвата не поддерживается';
   $('#privacy').textContent = state.platform === 'darwin' ? 'macOS: защита включена, но ScreenCaptureKit может захватить окно. Универсальная невидимость не гарантируется. Передавайте отдельное окно другого приложения и проверьте результат у зрителя.' : state.protectionRequested ? 'Защита от захвата включена. Проверьте результат у зрителя.' : 'На этой ОС исключение из захвата не поддерживается.';
   $('#hide-window').textContent = state.shortcutRegistered ? 'Скрыть / вернуть · ⌘/Ctrl + Shift + H' : 'Скрыть окно · вернуть через значок приложения';
-  const missing = Object.values(state.shortcuts || {}).filter(x => !x.registered).map(x => x.chord.replace('CommandOrControl', 'Cmd/Ctrl'));
-  $('#shortcut-warning').hidden = !missing.length; $('#shortcut-warning').textContent = `Сочетания заняты: ${missing.join(', ')}. Используйте кнопки в окне.`;
+  syncShortcuts(state.shortcuts);
 }
 function syncWindow(state) { pinned = state.pinned; $('#pin').setAttribute('aria-pressed', String(pinned)); $('#pin').textContent = pinned ? '↗ Закреплено' : '↗ Поверх окон'; $('#click-through').setAttribute('aria-pressed', String(Boolean(state.clickThrough))); $('#click-through').textContent = state.clickThrough ? 'Клики сквозь · ⌘⇧M' : 'Сквозь клики'; }
-window.ghost.onWindowState(syncWindow);
+window.ghost.onWindowState(state => { syncWindow(state); syncShortcuts(state.shortcuts); });
 $('#hide-stop').onclick = () => window.ghost.hideStop();
 window.ghost.onStop(() => { window.ghostSession?.stop(); showError(''); });
 loadProvider();
@@ -173,6 +206,7 @@ $('#hide-window').onclick = () => window.ghost.hide();
 $('#context').oninput = () => { save('ghost.context', $('#context').value); $('#context-status').textContent = 'Сохранено на этом устройстве'; };
 $('#custom-prompt').oninput = () => save('ghost.prompt', $('#custom-prompt').value);
 $('#settings-open').onclick = () => $('#settings').showModal();
+$('#settings').addEventListener('beforetoggle', event => { if (event.newState === 'open') showShortcutFields(); });
 $('#settings-close').onclick = () => $('#settings').close();
 $('#settings').addEventListener('close', () => { $('#api-key').value = ''; $('#gemini-key').value = ''; });
 async function saveGeminiKey() {
@@ -184,7 +218,23 @@ async function saveSettings() {
   if ($('#provider').value !== 'gemini' && $('#api-key').value.trim()) await window.ghost.setKey($('#provider').value, $('#api-key').value);
   $('#api-key').value = ''; save(`ghost.model.${$('#provider').value}`, $('#model').value.trim()); save('ghost.provider', $('#provider').value); await updateStatus();
 }
-$('#settings-form').onsubmit = async event => { event.preventDefault(); try { await saveSettings(); $('#settings').close(); } catch (error) { $('#settings-error').textContent = error.message; } };
+$('#settings-form').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const request = Object.fromEntries(shortcutFields.map(name => [name, $('#shortcut-' + name).value]));
+    if (shortcutFields.some(name => request[name] !== activeChords[name])) {
+      const result = await window.ghost.saveShortcuts(request);
+      if (result.error) throw Error(result.error);
+      syncShortcuts(result.shortcuts);
+    }
+    await saveSettings();
+    $('#settings').close();
+  } catch (error) { $('#settings-error').textContent = error.message; }
+  finally { button.disabled = false; }
+};
 $('#test-key').onclick = async () => {
   const { provider, model } = config();
   $('#test-key').disabled = true; $('#settings-error').textContent = `Проверяем ${providerLabels[provider]}…`;
@@ -213,23 +263,24 @@ $('#demo').onclick = () => { $('#answer-question').textContent = 'Пример �
 window.ghost.onDelta(({ text }) => { if (!busy) return; streamingText += text; showAnswer(streamingText, true); $('#timing').textContent = 'Генерация…'; });
 $('#cancel-answer').onclick = () => window.ghost.cancel();
 $('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
-async function ask(question) {
+const screenQuestion = 'Найди главный вопрос или задание на снимке. Коротко сформулируй, что спрашивают, и сразу дай ответ. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
+async function ask(question, { image = pendingImage, preserveDraft = false, title } = {}) {
   if (busy) return;
-  if (!question.trim() && !pendingImage) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }
+  if (!question.trim() && !image) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }
   const submittedDraft = $('#question').value;
   busy = true; streamingText = ''; $('#submit').disabled = true; $('#cancel-answer').hidden = false; $('.answer-card').setAttribute('aria-busy', 'true'); showError('');
   navigation();
   try {
     await window.ghostSession?.cancelAnswer();
     const request = config();
-    if (pendingImage) { request.provider = 'gemini'; request.model = request.recognitionModel; }
+    if (image) { request.provider = 'gemini'; request.model = request.recognitionModel; }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
-    question = question.trim() || 'Разбери задачу на снимке. Объясни решение и его сложность. Если текст неразборчив, скажи об этом.';
-    $('#answer-question').textContent = question;
-    const result = await window.ghost.generate({ ...request, question, ...(pendingImage ? { image: pendingImage } : {}) });
+    question = question.trim() || screenQuestion;
+    $('#answer-question').textContent = title || question;
+    const result = await window.ghost.generate({ ...request, question, ...(image ? { image } : {}) });
     if (result.error) throw Error(result.error);
-    presentResult(result, question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
-    if ($('#question').value === submittedDraft && submittedDraft.trim() === question) {
+    presentResult(result, title || question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
+    if (!preserveDraft && $('#question').value === submittedDraft && submittedDraft.trim() === question) {
       $('#question').value = ''; syncedQuestion = '';
       $('#question-origin').textContent = 'Введите следующий вопрос или продолжайте говорить';
       $('#use-heard').hidden = true;

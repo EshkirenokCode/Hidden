@@ -22,6 +22,7 @@ module.exports = async (url, options) => {
     if (body.model !== 'gemini-3.5-flash-lite') throw Error('Wrong fallback transcription model');
     answer='Что такое DNS?';
   }
+  if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) answer = 'Gemini screen response';
   if (body.response_format) answer = JSON.stringify({ transcript: 'What is an index?', question: 'What is an index?', answer: 'An index speeds up reads.' });
   if (body.stream) {
     const events = [

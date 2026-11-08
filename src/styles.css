@@ -12,3 +12,5 @@ header{-webkit-app-region:drag;user-select:none}button,input,textarea,select,a{-
 .question-origin{display:flex;align-items:center;justify-content:space-between;padding:5px 10px;font-size:10px;color:#b3c0c9}#heard-speech{overflow-wrap:anywhere;margin:5px 2px 8px;max-height:64px;overflow-y:auto}body.compact #heard-speech{font-size:11px;line-height:1.4;max-height:48px;flex-shrink:0}
 
 #speech-vocabulary{min-height:80px;max-height:140px;flex:none}#speech-metrics{font-size:10px;line-height:1.4;margin:4px 2px}#speech-correction{font-size:11px;line-height:1.4;overflow-wrap:anywhere;margin:4px 2px}body.compact #speech-metrics,body.compact #speech-correction{flex-shrink:0}body.compact #speech-metrics:empty{display:none}#latest-answer:not([hidden]){color:#c6fa97;border:1px solid #526543;border-radius:5px}
+
+.question-card .form-footer{flex-wrap:wrap}
