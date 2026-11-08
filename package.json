@@ -1,6 +1,6 @@
 {
   "name": "hidden",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Hidden desktop interview copilot",
   "main": "electron/main.cjs",
   "directories": {
@@ -26,5 +26,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/EshkirenokCode/Hidden.git"
+  },
+  "dependencies": {
+    "markdown-it": "^15.0.3"
   }
 }

@@ -99,15 +99,20 @@ function loadProvider() {
   $('#api-key').value = ''; $('#model').setAttribute('list', provider === 'gemini' ? 'model-options' : '');
 }
 function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), recognitionModel: geminiModel(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
+const answerMarkdown = window.markdownit({ html: false, linkify: false, breaks: true });
+// Model output can format text, but it cannot navigate or load images.
+answerMarkdown.renderer.rules.link_open = () => '<span class="answer-link">';
+answerMarkdown.renderer.rules.link_close = () => '</span>';
+answerMarkdown.renderer.rules.image = (tokens, index) => answerMarkdown.utils.escapeHtml(tokens[index].content);
 function showAnswer(answer, streaming = false) {
-  const box = $('#answer'), scroll = box.scrollTop, following = box.scrollHeight - scroll - box.clientHeight < 32;
-  currentAnswer = answer; $('#timing').textContent = ''; box.replaceChildren();
-  const code = /```[^\n]*\n([\s\S]*?)```/g; let match, offset = 0;
-  while ((match = code.exec(answer))) {
-    box.append(document.createTextNode(answer.slice(offset, match.index)));
-    const pre = document.createElement('pre'), text = document.createElement('code'); text.textContent = match[1]; pre.append(text); box.append(pre); offset = code.lastIndex;
-  }
-  box.append(document.createTextNode(answer.slice(offset))); box.classList.add('has-answer'); $('#copy').disabled = !answer;
+  const box = $('#answer');
+  const scroll = box.scrollTop;
+  const following = box.scrollHeight - scroll - box.clientHeight < 32;
+  currentAnswer = answer;
+  $('#timing').textContent = '';
+  box.innerHTML = answerMarkdown.render(answer);
+  box.classList.add('has-answer');
+  $('#copy').disabled = !answer;
   box.scrollTop = streaming ? (following ? box.scrollHeight : scroll) : 0;
 }
 function navigation() {
@@ -260,7 +265,17 @@ $('#compact').onclick = () => compact(!document.body.classList.contains('compact
 $('#clear').onclick = () => { history = []; selectedEntry = null; readingHistory = false; unread = 0; save('ghost.history', history); renderHistory(); };
 $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(currentAnswer); $('#copy').textContent = 'Скопировано'; setTimeout(() => { $('#copy').textContent = 'Копировать'; }, 1500); } catch { showError('Не удалось скопировать.'); } };
 $('#demo').onclick = () => { $('#answer-question').textContent = 'Пример ответа · не отправляется в API'; showAnswer('Демонстрация · подготовленный пример\n\nOptimistic locking проверяет версию записи при обновлении. Если версия изменилась, операция повторяется или возвращает конфликт.\n\nPessimistic locking блокирует запись на время транзакции. Другие операции ждут. Подходит при частых конфликтах, но требует коротких транзакций и контроля deadlock.'); };
-window.ghost.onDelta(({ text }) => { if (!busy) return; streamingText += text; showAnswer(streamingText, true); $('#timing').textContent = 'Генерация…'; });
+let answerPaint;
+window.ghost.onDelta(({ text }) => {
+  if (!busy) return;
+  streamingText += text;
+  if (answerPaint) return;
+  answerPaint = setTimeout(() => {
+    answerPaint = null;
+    showAnswer(streamingText, true);
+    $('#timing').textContent = 'Генерация…';
+  }, 40);
+});
 $('#cancel-answer').onclick = () => window.ghost.cancel();
 $('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
 const screenQuestion = 'Найди главный вопрос или задание на снимке. Коротко сформулируй, что спрашивают, и сразу дай ответ. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
@@ -285,8 +300,13 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
       $('#question-origin').textContent = 'Введите следующий вопрос или продолжайте говорить';
       $('#use-heard').hidden = true;
     }
-  } catch (error) { showError(error.message); }
-  finally { busy = false; $('#submit').disabled = false; $('#cancel-answer').hidden = true; $('.answer-card').setAttribute('aria-busy', 'false'); navigation(); }
+  } catch (error) {
+    if (streamingText) showAnswer(streamingText);
+    showError(error.message);
+  }
+  finally {
+    clearTimeout(answerPaint); answerPaint = null;
+    busy = false; $('#submit').disabled = false; $('#cancel-answer').hidden = true; $('.answer-card').setAttribute('aria-busy', 'false'); navigation(); }
 }
 $('#question-form').onsubmit = event => { event.preventDefault(); ask($('#question').value); };
 $('#question').onkeydown = event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $('#question-form').requestSubmit(); } };

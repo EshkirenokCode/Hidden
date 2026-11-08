@@ -8,11 +8,17 @@ let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, l
 let turns = new QuestionTurns(), sessionConfig, sessionVocabulary = [];
 let latestMetrics = null;
 let inFlightQuestion = '';
-const autoAnswer = $('#auto-answer');
-autoAnswer.checked = localStorage.getItem('hidden.answerMode') !== 'manual';
-autoAnswer.onchange = () => {
-  localStorage.setItem('hidden.answerMode', autoAnswer.checked ? 'auto' : 'manual');
-  if (running && !monitorOnly) status(autoAnswer.checked ? 'Автоответ включён' : 'Ручной режим · отвечаю по команде');
+const answerMode = $('#answer-mode');
+answerMode.value = localStorage.getItem('hidden.answerMode') === 'manual' ? 'manual' : 'auto';
+answerMode.onchange = () => {
+  localStorage.setItem('hidden.answerMode', answerMode.value);
+  if (answerMode.value === 'manual' && inFlightQuestion) {
+    cancelAnswer();
+    metrics({ waiting: false });
+  }
+  if (running && !monitorOnly) status(answerMode.value === 'manual'
+    ? 'Ручной режим · ответ только по кнопке или сочетанию клавиш'
+    : 'Автоматический режим · отвечаем на распознанные вопросы');
 };
 function setLastQuestion(question) {
   lastQuestion = question;
@@ -80,7 +86,7 @@ export async function acceptTranscript(raw, endedAt, transcriptionMs) {
   } else $('#speech-correction').hidden = true;
   if (!result.question) { status('Фраза услышана · ожидаем вопрос или его продолжение'); return; }
   metrics({ mode: live ? 'Live' : 'По фразам', transcriptionMs, firstWordsMs: null, totalMs: null, waiting: false });
-  if (!autoAnswer.checked || ui.busy()) { status('Вопрос распознан · готов к ответу по команде'); return; }
+  if (answerMode.value === 'manual' || ui.busy()) { status('Вопрос распознан · готов к ответу по команде'); return; }
   status('Вопрос понят · готовим ответ');
   voiceBeganAt = endedAt;
   const id = ++voiceId, sessionId = epoch;
@@ -233,7 +239,7 @@ async function start(testOnly = false) {
     if (!testOnly) { ui.followLive(); $('#heard-speech').hidden = false; $('#heard-speech').textContent = 'Слушаем · ожидаем новую фразу'; }
     timer = setInterval(() => { const sec = Math.floor((Date.now() - started) / 1000); $('#session-time').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }, 1000);
     $('#stop-session').disabled = false; $('#flush-audio').disabled = testOnly; $('#audio-source').disabled = true; sourceButtons(); $('#check-sound').disabled = true; $('#live-dot').classList.add('listening');
-    status(testOnly ? 'Проверка звука: только индикатор, без отправки аудио в API. Включите звук и проверьте уровень.' : fallback || (live ? 'Live · распознаём во время речи' : 'Слушаем · распознаём после паузы'));
+    status(testOnly ? 'Проверка звука: только индикатор, без отправки аудио в API. Включите звук и проверьте уровень.' : (fallback || (live ? 'Live · распознаём во время речи' : 'Слушаем · распознаём после паузы')) + (answerMode.value === 'manual' ? ' · ответ по кнопке' : ''));
   } catch (error) { if (id !== epoch) return; const diagnostics = await window.ghost.mediaDiagnostics(); await stop(); ui.showError(captureError(error, $('#audio-source').value, diagnostics)); }
   finally { starting = false; $('#start-session').disabled = running; if (!running) { stream?.getTracks().forEach(t => t.stop()); if (audioContext && audioContext.state !== 'closed') await audioContext.close(); await window.ghost.armMedia(false); } }
 }
@@ -284,7 +290,11 @@ $('#answer-last').onclick = answerLast;
 $('#answer-heard').onclick = answerLast;
 $('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; setLastQuestion(''); $('#transcript').textContent = 'Диалог очищен.'; };
 window.ghost.onAnswerLast(answerLast); window.ghost.onSnapshot(() => snapshot({ reuse: true }));
-window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics,
-  cancelAnswer() { voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); return window.ghost.cancelSpeechAnswer(); }
-};
+function cancelAnswer() {
+  voiceId++;
+  inFlightQuestion = '';
+  ui.endSpeechAnswer(undefined, true);
+  return window.ghost.cancelSpeechAnswer();
+}
+window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics, cancelAnswer };
 window.addEventListener('beforeunload', () => { stream?.getTracks().forEach(t => t.stop()); window.ghost.armMedia(false); });

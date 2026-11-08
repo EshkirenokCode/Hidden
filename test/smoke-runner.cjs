@@ -54,8 +54,13 @@ module.exports = async ({ app, win, toggleWindow }) => {
       await waitFor(() => !document.querySelector('#settings').open);
       if ((await window.ghost.privacyStatus()).shortcuts.answer.chord !== 'Alt+F7') throw Error('Shortcut was not changed through settings');
       const fence=String.fromCharCode(96).repeat(3), nl=String.fromCharCode(10);
-      window.copilot.presentResult({answer:fence+'js'+nl+'<img src=x>'+nl+fence,elapsedMs:1},'Code block');
-      if(!document.querySelector('#answer pre code') || document.querySelector('#answer img')) throw Error('Safe code rendering failed');
+      const markdown = ['### Заголовок', '', '- **Жирный** и *курсив*', '- [Ссылка](https://example.com)', '',
+        fence+'js', '<img src=x>', fence, '', '<img src=x onerror=alert(1)>', '![Картинка](https://example.com/image.png)'].join(nl);
+      window.copilot.presentResult({answer:markdown,elapsedMs:1},'Markdown');
+      const formatted = document.querySelector('#answer');
+      if (!formatted.querySelector('h3') || !formatted.querySelector('ul strong') || !formatted.querySelector('li em') ||
+          formatted.querySelector('pre code')?.textContent.trim() !== '<img src=x>' || formatted.querySelector('img, a') ||
+          !formatted.textContent.includes('Картинка')) throw Error('Markdown was not rendered safely');
       window.copilot.presentResult({answer:'Older readable answer',elapsedMs:1},'Older question');
       window.copilot.presentResult({answer:'Newest readable answer',elapsedMs:1},'Newest question');
       document.querySelector('#question').value='Unsent draft';
@@ -122,22 +127,26 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#settings-form').requestSubmit();
       await waitFor(() => !document.querySelector('#settings').open);
       document.querySelector('#question').value='';
-      document.querySelector('#auto-answer').click();
+      const mode = document.querySelector('#answer-mode');
+      const setMode = value => { mode.value = value; mode.dispatchEvent(new Event('change')); };
+      setMode('manual');
       document.querySelector('#speech-vocabulary').value='DENY_LIVE_TEST';
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
       if(!document.querySelector('#session-status').textContent.includes('по фразам')) throw Error('Live rejection did not visibly fall back');
-      const {consumeAudioFrame}=await import('./session.mjs');
+      const {consumeAudioFrame, acceptTranscript}=await import('./session.mjs');
       consumeAudioFrame(new Float32Array(8000).fill(.1),16000);
       document.querySelector('#flush-audio').click();
       await waitFor(() => document.querySelector('#question').value==='Что такое DNS?');
       if (document.querySelector('#answer-question').textContent==='Что такое DNS?' || window.ghostSession.metrics()?.totalMs != null) throw Error('Manual mode requested an automatic answer');
+      await acceptTranscript('Как работает TCP?',performance.now(),0);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (document.querySelector('#answer-question').textContent==='Как работает TCP?') throw Error('Manual mode answered a later question automatically');
       document.querySelector('#answer-heard').click();
-      await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response: Что такое DNS?') && !document.querySelector('#submit').disabled);
-      document.querySelector('#auto-answer').click();
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response: Как работает TCP?') && !document.querySelector('#submit').disabled);
+      setMode('auto');
       document.querySelector('#stop-session').click();
       await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
-      if(!document.querySelector('#answer').textContent.includes('Groq smoke response: Что такое DNS?')) throw Error('Gemini fallback transcript did not reach Groq');
       document.querySelector('#speech-vocabulary').value='';
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
@@ -155,7 +164,6 @@ module.exports = async ({ app, win, toggleWindow }) => {
       if(!document.querySelector('#speech-correction').textContent.includes('Go (Golang)')) throw Error('Term correction not disclosed');
       await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
       if(!window.ghostSession.conversation().includes('Gemini smoke response')) throw Error('Audio answer missing from conversation');
-      const {acceptTranscript}=await import('./session.mjs');
       const delayedAnswer=acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
       await new Promise(r=>setTimeout(r,10500));
       if(!window.ghostSession.metrics().waiting || !document.querySelector('#speech-metrics').textContent.includes('запрос продолжается')) throw Error('Slow request not shown in the compact-visible status');
