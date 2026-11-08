@@ -1,3 +1,4 @@
+const { continuity } = require('./dialogue.cjs');
 const model = 'openai/gpt-oss-20b';
 const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -12,9 +13,14 @@ async function generateGroq(request, key, fetchImpl, { signal: external, onDelta
       'Учитывай ошибки распознавания технических терминов. При существенной неоднозначности задай один короткий уточняющий вопрос.',
       'Если вопрос уточняет предыдущий ответ, используй из диалога нужный предмет и детали. Если в текущем вопросе несколько частей, ответь на каждую по порядку.',
       request.style === 'brief' ? 'Дай 2–3 ключевых тезиса, не более 150 слов.' : 'Объясни решение и приведи пример.',
+      continuity,
       request.customPrompt || ''
     ].join(' ') },
-    { role: 'user', content: `Контекст кандидата и вакансии:\n${request.context || 'Не задан'}\n\nДиалог:\n${request.conversation || 'Нет'}\n\nВопрос:\n${request.question}` }
+    ...((request.dialogue || []).flatMap(turn => [
+      { role: 'user', content: turn.question },
+      { role: 'assistant', content: turn.answer }
+    ])),
+    { role: 'user', content: `Контекст кандидата и вакансии (справка):\n${request.context || 'Не задан'}\n\nНедавняя речь (справка):\n${request.conversation || 'Нет'}\n\nВопрос:\n${request.question}` }
   ];
   let response;
   try {

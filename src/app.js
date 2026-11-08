@@ -98,7 +98,7 @@ function loadProvider() {
   $('#settings-error').textContent = '';
   $('#api-key').value = ''; $('#model').setAttribute('list', provider === 'gemini' ? 'model-options' : '');
 }
-function config() { return { provider: $('#provider').value, model: $('#model').value.trim(), recognitionModel: geminiModel(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, conversation: window.ghostSession?.conversation() || '' }; }
+function config(question = '', includeSpeech = false) { return { provider: $('#provider').value, model: $('#model').value.trim(), recognitionModel: geminiModel(), context: $('#context').value, vocabulary: $('#speech-vocabulary').value, recognitionMode: $('#recognition-mode').value, style: $('#style').value, customPrompt: $('#custom-prompt').value, dialogue: window.ghostSession?.dialogue(question) || [], conversation: includeSpeech ? window.ghostSession?.recentSpeech() || '' : '' }; }
 const answerMarkdown = window.markdownit({ html: false, linkify: false, breaks: true });
 // Model output can format text, but it cannot navigate or load images.
 answerMarkdown.renderer.rules.link_open = () => '<span class="answer-link">';
@@ -138,8 +138,8 @@ function renderHistory() {
   history.forEach(item => { const button = document.createElement('button'); button.className = 'history-item'; button.textContent = item.question; button.title = item.question; button.onclick = () => selectEntry(item); $('#history').append(button); });
   navigation();
 }
-function presentResult(result, question, audio = false) {
-  window.ghostSession?.rememberAnswer(question, result.answer);
+function presentResult(result, question, audio = false, memoryQuestion = question) {
+  window.ghostSession?.rememberAnswer(memoryQuestion, result.answer);
   const entry = { question, answer: result.answer };
   const follow = !audio || (!busy && !readingHistory);
   history.unshift(entry);
@@ -280,7 +280,7 @@ window.ghost.onDelta(({ text }) => {
 $('#cancel-answer').onclick = () => window.ghost.cancel();
 $('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
 const screenQuestion = 'Найди все читаемые вопросы и задания на снимке. Ответь на каждый в исходном порядке, пронумеруй ответы и кратко повтори формулировку каждого вопроса. Если часть снимка не читается, укажи, какие пункты не удалось разобрать. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
-async function ask(question, { image = pendingImage, preserveDraft = false, title } = {}) {
+async function ask(question, { image = pendingImage, preserveDraft = false, title, heard = false } = {}) {
   if (busy) return;
   if (!question.trim() && !image) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }
   const submittedDraft = $('#question').value;
@@ -288,14 +288,14 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
   navigation();
   try {
     await window.ghostSession?.cancelAnswer();
-    const request = config();
+    question = question.trim() || screenQuestion;
+    const request = config(question, heard);
     if (image) { request.provider = 'gemini'; request.model = request.recognitionModel; }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
-    question = question.trim() || screenQuestion;
     $('#answer-question').textContent = title || question;
     const result = await window.ghost.generate({ ...request, question, ...(image ? { image } : {}) });
     if (result.error) throw Error(result.error);
-    presentResult(result, title || question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
+    presentResult(result, title || question, false, title ? title + '\n' + question : question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
     if (!preserveDraft && $('#question').value === submittedDraft && submittedDraft.trim() === question) {
       $('#question').value = ''; syncedQuestion = '';
       $('#question-origin').textContent = 'Введите следующий вопрос или продолжайте говорить';

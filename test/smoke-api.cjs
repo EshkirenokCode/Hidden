@@ -4,9 +4,9 @@ module.exports = async (url, options) => {
     if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] ||
         body.model !== 'openai/gpt-oss-20b' || !body.stream || body.reasoning_effort !== 'low' ||
         body.include_reasoning !== false || body.messages.some(message => typeof message.content !== 'string')) throw Error('Wrong Groq routing');
-    const input = body.messages[1].content;
+    const input = body.messages.at(-1).content;
     const question = input.split('Вопрос:\n').at(-1);
-    if (question === 'А для HTTPS?' && !input.includes('Ответ Hidden: Groq smoke response: Что такое DNS? Как работает TCP?')) {
+    if (question === 'А для HTTPS?' && !(body.messages.at(-2)?.role === 'assistant' && body.messages.at(-2).content === 'Groq smoke response: Что такое DNS? Как работает TCP?' && body.messages.at(-3)?.content === 'Что такое DNS? Как работает TCP?')) {
       throw Error('Follow-up request is missing the previous manual answer');
     }
     const answer = 'Groq smoke response: ' + question;
@@ -30,7 +30,7 @@ module.exports = async (url, options) => {
   if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) {
     const prompt = body.input.find(item => item.type === 'text')?.text || '';
     if (prompt.endsWith('Ответь на все семь вопросов')) {
-      if (!prompt.includes('Ответ Hidden: Gemini screen response')) throw Error('Screen follow-up lost previous answer');
+      if (!prompt.includes('Помощник: Gemini screen response')) throw Error('Screen follow-up lost previous answer');
       answer = 'Gemini follow-up with screenshot';
     } else {
       if (prompt.includes('Найди все читаемые') && !prompt.includes('Ответь на каждый')) throw Error('Screen prompt ignored multiple items');

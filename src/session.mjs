@@ -1,3 +1,4 @@
+import { selectDialogue } from './dialogue.mjs';
 import { SpeechSegments } from './audio.mjs';
 import { captureError } from './capture.mjs';
 import { joinSpeech, PcmPackets, QuestionTurns, vocabulary } from './speech.mjs';
@@ -59,10 +60,11 @@ const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
 function rememberAnswer(question, answer) {
   answeredTurns.push({ question: question.slice(0, 3000), answer: answer.slice(0, 4500) });
-  if (answeredTurns.length > 12) answeredTurns.shift();
+  if (answeredTurns.length > 40) answeredTurns.shift();
 }
+function recentSpeech() { return transcript.map(turn => turn.text).join('\n').slice(-2400); }
 function conversation() {
-  const speech = transcript.map(turn => turn.text).join('\n').slice(-2400);
+  const speech = recentSpeech();
   const recent = [];
   let budget = 9400;
   for (const turn of answeredTurns.slice().reverse()) {
@@ -116,14 +118,14 @@ function finishQuestion() {
   const button = document.createElement('button');
   button.className = 'text-button';
   button.textContent = '↗ ' + question.question;
-  button.onclick = () => ui.ask(question.question, { image: null });
+  button.onclick = () => ui.ask(question.question, { image: null, heard: true });
   question.row.append(button);
   if (answerMode.value === 'auto') {
     readyQuestions.push(question);
     dispatchQuestions();
   } else if (manualRequestTimer) {
     clearManualRequest();
-    ui.ask(question.question, { image: null });
+    ui.ask(question.question, { image: null, heard: true });
   } else {
     status('Вопрос готов · нажмите «Ответить на услышанное»');
   }
@@ -180,7 +182,7 @@ async function generateSpeechAnswer({ question, endedAt, transcriptionMs }) {
   inFlightQuestion = questionKey;
   ui.beginSpeechAnswer(id, question);
   try {
-    const answer = await window.ghost.speechAnswer({ ...ui.config(), id, question });
+    const answer = await window.ghost.speechAnswer({ ...ui.config(question, true), id, question });
     if (id !== voiceId || sessionId !== epoch || !running) return;
     if (answer.error) { metrics({ waiting: false }); ui.endSpeechAnswer(id, true); ui.showError(answer.error); status(answer.partialAnswer ? 'Получена часть ответа · можно повторить вопрос' : 'Ответ не получен · вопрос сохранён для повтора'); return; }
     metrics({ totalMs: performance.now() - endedAt });
@@ -406,7 +408,7 @@ function answerLast() {
     clearTimeout(settleTimer);
     assembling = null;
   }
-  return ui.ask(lastQuestion, { image: null });
+  return ui.ask(lastQuestion, { image: null, heard: true });
 }
 $('#answer-last').onclick = answerLast;
 $('#answer-heard').onclick = answerLast;
@@ -418,5 +420,5 @@ function cancelAnswer() {
   ui.endSpeechAnswer(undefined, true);
   return window.ghost.cancelSpeechAnswer();
 }
-window.ghostSession = { conversation, rememberAnswer, active: () => running || starting, stop, metrics: () => latestMetrics, cancelAnswer };
+window.ghostSession = { conversation, recentSpeech, rememberAnswer, dialogue: question => selectDialogue(answeredTurns, question), active: () => running || starting, stop, metrics: () => latestMetrics, cancelAnswer };
 window.addEventListener('beforeunload', () => { stream?.getTracks().forEach(t => t.stop()); window.ghost.armMedia(false); });

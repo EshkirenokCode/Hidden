@@ -39,3 +39,15 @@ test('VAD retains about 300 ms before speech independent of native packet size',
   for(let i=0;i<70;i++)vad.push(new Float32Array(480));
   assert.ok(result);assert.ok(new DataView(result).getUint32(40,true)>=48000*2);
 });
+
+test('dialogue retains the original topic across short follow-ups and can recall a named older topic', async () => {
+  const { selectDialogue } = await import('../src/dialogue.mjs');
+  const turns = [
+    { question: 'Как работает PostgreSQL?', answer: 'PostgreSQL uses MVCC.' },
+    { question: 'Как Redis удаляет ключи?', answer: 'Redis applies an eviction policy.' },
+    ...['А почему?', 'Приведи пример', 'А второй?', 'А при нагрузке?']
+      .map(question => ({ question, answer: 'Follow-up about Redis.' }))
+  ];
+  assert.equal(selectDialogue(turns, 'А дальше?')[0].question, 'Как Redis удаляет ключи?');
+  assert.equal(selectDialogue(turns, 'Вернёмся к PostgreSQL')[0].answer, 'PostgreSQL uses MVCC.');
+});
