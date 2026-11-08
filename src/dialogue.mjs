@@ -1,24 +1,38 @@
-// Recent exchanges resolve short references. An older exchange can still matter
-// when the user explicitly returns to a named topic.
+const recentCount = 4;
+const followUp = /^(?:а\s|и\s|почему\s*[?.!]*$|(?:можно\s+)?(?:(?:приведи(?:те)?|покажи(?:те)?|дай(?:те)?)\s+)?пример(?=[\s.!?]|$)|(?:по)?подробнее|(?:а\s+)?(?:первый|второй|третий|последний)\s*[?.!]*$|(?:можешь|можете)\s+(?:пояснить|уточнить)|в ч[её]м разница\s*[?.!]*$|что (?:это|именно) значит|what about|and\s|(?:give|show)(?: me)? an example|why\s*[?.!]*$)/iu;
+
+export function isDialogueFollowUp(question) {
+  return followUp.test(question.trim());
+}
+
+export function rememberDialogueTurn(turns, question, answer) {
+  const turn = { question: question.slice(0, 3000), answer: answer.slice(0, 4500) };
+  const previous = turns.at(-1);
+  turn.topic = previous && isDialogueFollowUp(question)
+    ? previous.topic : { question: turn.question, answer: turn.answer };
+  turns.push(turn);
+  if (turns.length > 40) turns.shift();
+}
+
 export function selectDialogue(turns, question) {
-  const recentCount = 4;
-  const terms = text => new Set((text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || [])
-    .filter(word => !/^(?:что|какие|какой|когда|можно|расскажи|объясни|почему|подробнее|пример|ответь|question|please|about|explain)$/u.test(word)));
+  const terms = text => new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || [])
+    .filter(word => !/^(?:что|как|какие|какой|когда|можно|расскажи|объясни|почему|подробнее|пример|ответь|вернёмся|вернемся|question|please|about|explain)$/u.test(word)));
   const query = terms(question);
   const recent = turns.slice(-recentCount);
-  const isFollowUp = text => /^(?:а\b|а\s|и\s|почему\s*[?.!]*$|(?:приведи(?:те)?\s+)?пример|поподробнее|подробнее|what about|and\s)/iu.test(text.trim());
-  const anchor = recent.length === recentCount && recent.every(turn => isFollowUp(turn.question))
-    ? turns.slice(0, -recentCount).findLast(turn => !isFollowUp(turn.question))
+  const earlier = turns.slice(0, -recentCount);
+  const anchor = isDialogueFollowUp(question)
+    ? turns.at(-1)?.topic || earlier.findLast(turn => !isDialogueFollowUp(turn.question))
     : undefined;
-  const earlier = turns.slice(0, -recentCount).map((turn, index) => ({
+  const sameExchange = (turn, other) => turn.question === other.question && turn.answer === other.answer;
+  const needsAnchor = anchor && !recent.some(turn => sameExchange(turn, anchor));
+  const related = earlier.map((turn, index) => ({
     turn, index, score: [...terms(turn.question)].filter(word => query.has(word)).length
-  }));
-  const related = earlier.filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score || b.index - a.index).slice(0, anchor ? 1 : 2)
+  })).filter(item => item.score > 0 && (!anchor || !sameExchange(item.turn, anchor)))
+    .sort((a, b) => b.score - a.score || b.index - a.index).slice(0, needsAnchor ? 1 : 2)
     .sort((a, b) => a.index - b.index).map(item => item.turn);
-  const older = turns.slice(0, -recentCount).filter(turn => turn === anchor || related.includes(turn));
-  return [...older, ...recent].map((turn, index, selected) => ({
+  const selected = [...(needsAnchor ? [anchor] : []), ...related, ...recent];
+  return selected.map((turn, index) => ({
     question: turn.question.slice(0, 650),
-    answer: turn.answer.slice(0, index === selected.length - 1 ? 3000 : 850)
+    answer: turn.answer.slice(0, index === selected.length - 1 ? 3000 : turn === anchor ? 1800 : 850)
   }));
 }

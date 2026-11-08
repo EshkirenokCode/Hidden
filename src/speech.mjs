@@ -1,3 +1,4 @@
+import { isDialogueFollowUp } from './dialogue.mjs';
 const defaults = ['Go','Golang','goroutine','channel','interface','defer','Python','JavaScript','TypeScript','Java','C++','C#','.NET','Rust','PostgreSQL','MySQL','Redis','MongoDB','SQL','NoSQL','Docker','Kubernetes','Kafka','RabbitMQ','gRPC','REST','GraphQL','HTTP','TCP','UDP','DNS','Linux','Git','GitHub','CI/CD','AWS','React','Node.js','optimistic locking','pessimistic locking','deadlock','mutex','garbage collector'];
 export function vocabulary(custom = '', context = '') {
   const words = custom.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
@@ -40,7 +41,7 @@ export class QuestionTurns {
     const text = normalized.text;
     const explicit = /\?|(?:^|[.!:]\s*)(?:what|why|how|when|where|explain|describe|compare|tell me|write|solve|can you|could you|have you|do you|are you)\b/iu.test(text);
     const russian = /(?:^|[.!:]\s*)(?:(?:а|и|ну|тогда)\s+)?(?:что|как|чем|почему|зачем|какие|какой|какая|какое|каких|какими|каковы|когда|где|сколько|особенности|разница)(?=$|[^\p{L}])|(?:^|[^\p{L}])(?:расскажите|расскажи|объясните|объясни|сравните|сравни|назовите|опишите|решите|напишите|покажите)(?=$|[^\p{L}])/iu.test(text);
-    const followUp = hasContext && /^(?:а (?:если|для|в|на|с|без|при)\s+|(?:можно\s+)?(?:пример|подробнее|поподробнее)(?:[.!?\s]|$)|(?:and )?(?:what about|for example)\b)/iu.test(text);
+    const followUp = hasContext && (isDialogueFollowUp(text) || /^(?:а (?:если|для|в|на|с|без|при)\s+|(?:можно\s+)?(?:пример|подробнее|поподробнее)(?:[.!?\s]|$)|(?:and )?(?:what about|for example)\b)/iu.test(text));
     const unfinished = /(?:^|[^\p{L}])(?:об|о|про|в|на|и|языка|языке|такое|такой|отличается|отличаются|между|особенностях|особенности|about|between|what is|how to)[\s.,]*$/iu.test(text);
     if ((!explicit && !russian && !followUp) || unfinished || text.length < 4) { this.pending = explicit || russian || followUp ? text : ''; return { ...normalized, question: '' }; }
     this.pending = '';

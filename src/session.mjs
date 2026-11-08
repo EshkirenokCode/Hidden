@@ -1,4 +1,4 @@
-import { selectDialogue } from './dialogue.mjs';
+import { rememberDialogueTurn, selectDialogue } from './dialogue.mjs';
 import { SpeechSegments } from './audio.mjs';
 import { captureError } from './capture.mjs';
 import { joinSpeech, PcmPackets, QuestionTurns, vocabulary } from './speech.mjs';
@@ -59,8 +59,7 @@ const ui = window.copilot;
 const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
 function rememberAnswer(question, answer) {
-  answeredTurns.push({ question: question.slice(0, 3000), answer: answer.slice(0, 4500) });
-  if (answeredTurns.length > 40) answeredTurns.shift();
+  rememberDialogueTurn(answeredTurns, question, answer);
 }
 function recentSpeech() { return transcript.map(turn => turn.text).join('\n').slice(-2400); }
 function conversation() {

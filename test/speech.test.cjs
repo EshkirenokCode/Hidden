@@ -51,3 +51,22 @@ test('dialogue retains the original topic across short follow-ups and can recall
   assert.equal(selectDialogue(turns, 'А дальше?')[0].question, 'Как Redis удаляет ключи?');
   assert.equal(selectDialogue(turns, 'Вернёмся к PostgreSQL')[0].answer, 'PostgreSQL uses MVCC.');
 });
+
+test('the original topic survives eviction of the initial exchange', async () => {
+  const { rememberDialogueTurn, selectDialogue } = await import('../src/dialogue.mjs');
+  const turns = [];
+  rememberDialogueTurn(turns, 'Как PostgreSQL обрабатывает блокировки?', 'Сначала разделим блокировки строк и таблиц.');
+  for (let i = 0; i < 45; i++) rememberDialogueTurn(turns, 'Приведи пример', 'Пример ' + i);
+  const history = selectDialogue(turns, 'А второй вариант?');
+  assert.match(history[0].question, /PostgreSQL/);
+  assert.match(history[0].answer, /строк и таблиц/);
+  assert.equal(history.at(-1).answer, 'Пример 44');
+  rememberDialogueTurn(turns, 'Как работает DNS?', 'DNS разрешает имена.');
+  assert.equal(selectDialogue(turns, 'А почему?').some(turn => /PostgreSQL/.test(turn.question)), false);
+});
+
+test('speech detects a contextual request for an example without question punctuation', async () => {
+  const { QuestionTurns } = await import('../src/speech.mjs');
+  assert.equal(new QuestionTurns().accept('Приведи пример', 1000, true).question, 'Приведи пример');
+  assert.equal(new QuestionTurns().accept('Приведи пример', 1000).question, '');
+});
