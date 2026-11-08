@@ -3,8 +3,11 @@ import { captureError } from './capture.mjs';
 import { PcmPackets, QuestionTurns, vocabulary } from './speech.mjs';
 const $ = s => document.querySelector(s);
 let running = false, starting = false, stream, audioContext, worklet, input, segments, queue = [], processing = false, epoch = 0, timer, started = 0;
-let transcript = [], lastQuestion = '', selectedScreen = null;
-let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, lastVoiceAt = 0;
+let transcript = [], answeredTurns = [], lastQuestion = '', selectedScreen = null;
+let assembling, settleTimer, dispatchTimer, lastInterimAt = 0;
+const readyQuestions = [];
+const questionPauseMs = 1500;
+let monitorOnly = false, live = false, pcmPackets, frameRate = 0, voiceId = 0, lastVoiceAt = 0, speechStartedAt = 0;
 let turns = new QuestionTurns(), sessionConfig, sessionVocabulary = [];
 let latestMetrics = null;
 let inFlightQuestion = '';
@@ -12,9 +15,13 @@ const answerMode = $('#answer-mode');
 answerMode.value = localStorage.getItem('hidden.answerMode') === 'manual' ? 'manual' : 'auto';
 answerMode.onchange = () => {
   localStorage.setItem('hidden.answerMode', answerMode.value);
-  if (answerMode.value === 'manual' && inFlightQuestion) {
-    cancelAnswer();
-    metrics({ waiting: false });
+  if (answerMode.value === 'manual') {
+    readyQuestions.length = 0;
+    clearTimeout(dispatchTimer);
+    if (inFlightQuestion) {
+      cancelAnswer();
+      metrics({ waiting: false });
+    }
   }
   if (running && !monitorOnly) status(answerMode.value === 'manual'
     ? 'Ручной режим · ответ только по кнопке или сочетанию клавиш'
@@ -46,18 +53,30 @@ window.ghost.onNativeAudioError(async error => { if (running) { await stop(); ui
 const ui = window.copilot;
 const status = text => { $('#session-status').textContent = text; };
 function base64(buffer) { let text = ''; for (const byte of new Uint8Array(buffer)) text += String.fromCharCode(byte); return btoa(text); }
-function conversation() { return transcript.map(x => `${x.text}${x.question ? `\nВопрос: ${x.question}` : ''}${x.answer ? `\nУже дан ответ: ${x.answer}` : ''}`).join('\n').slice(-12000); }
-function appendTranscript(item) {
-  if (item.question) { setLastQuestion(item.question); ui.receiveQuestion(item.question); }
-  if (!item.transcript) return;
-  const stored = { text: item.transcript, question: item.question, answer: item.answer }; transcript.push(stored); transcript = transcript.slice(-40);
+function rememberAnswer(question, answer) {
+  answeredTurns.push({ question: question.slice(0, 3000), answer: answer.slice(0, 4500) });
+  if (answeredTurns.length > 12) answeredTurns.shift();
+}
+function conversation() {
+  const speech = transcript.map(turn => turn.text).join('\n').slice(-2400);
+  const recent = [];
+  let budget = 9400;
+  for (const turn of answeredTurns.slice().reverse()) {
+    const pair = `Вопрос: ${turn.question}\nОтвет Hidden: ${turn.answer}`;
+    if (pair.length + 2 > budget) break;
+    recent.unshift(pair);
+    budget -= pair.length + 2;
+  }
+  return ['Недавняя речь:\n' + speech, recent.length && 'Предыдущие вопросы и ответы:\n' + recent.join('\n\n')].filter(Boolean).join('\n\n');
+}
+function appendTranscript(textValue) {
+  transcript.push({ text: textValue }); transcript = transcript.slice(-40);
   const row = document.createElement('div'); row.className = 'transcript-row';
   const time = document.createElement('span'); time.className = 'muted small'; time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const text = document.createElement('p'); text.textContent = item.transcript; row.append(time, text);
-  if (item.question) { const button = document.createElement('button'); button.className = 'text-button'; button.textContent = `↗ ${item.question}`; button.onclick = () => ui.ask(item.question, { image: null }); row.append(button); }
+  const text = document.createElement('p'); text.textContent = textValue; row.append(time, text);
   if (!$('#transcript .transcript-row')) $('#transcript').replaceChildren();
   $('#transcript').append(row); while ($('#transcript').children.length > 40) $('#transcript').firstChild.remove(); $('#transcript').scrollTop = $('#transcript').scrollHeight;
-  return stored;
+  return row;
 }
 function heard(text, interim = false) {
   $('#heard-speech').hidden = false;
@@ -73,36 +92,90 @@ function metrics(values) {
     latestMetrics.waiting ? 'Ответ задерживается · запрос продолжается' : ''
   ].filter(Boolean).join(' · ');
 }
-export async function acceptTranscript(raw, endedAt, transcriptionMs) {
+function scheduleQuestion() {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settleQuestion, questionPauseMs);
+}
+function settleQuestion() {
+  if (!running || !assembling) return;
+  // Transcription boundaries are not conversation boundaries.
+  const latestSpeech = live ? lastInterimAt : lastVoiceAt;
+  if (processing || queue.length || performance.now() - latestSpeech < questionPauseMs) {
+    settleTimer = setTimeout(settleQuestion, 150);
+    return;
+  }
+  finishQuestion();
+}
+function finishQuestion() {
+  const question = assembling;
+  assembling = null;
+  const button = document.createElement('button');
+  button.className = 'text-button';
+  button.textContent = '↗ ' + question.question;
+  button.onclick = () => ui.ask(question.question, { image: null });
+  question.row.append(button);
+  if (answerMode.value === 'auto') {
+    readyQuestions.push(question);
+    dispatchQuestions();
+  } else {
+    status('Вопрос готов · нажмите «Ответить на услышанное»');
+  }
+}
+function dispatchQuestions() {
+  clearTimeout(dispatchTimer);
+  if (!running || answerMode.value !== 'auto' || !readyQuestions.length || inFlightQuestion) return;
+  if (ui.busy()) {
+    dispatchTimer = setTimeout(dispatchQuestions, 150);
+    return;
+  }
+  generateSpeechAnswer(readyQuestions.shift());
+}
+export function acceptTranscript(raw, endedAt, transcriptionMs, beganAt = endedAt) {
   if (!running || monitorOnly || !raw.trim()) return;
-  const result = turns.accept(raw);
+  const result = turns.accept(raw, Date.now(), Boolean(lastQuestion || answeredTurns.length));
   heard(result.text);
   const questionKey = (result.question || result.text).toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   if (questionKey && questionKey === inFlightQuestion) { status('Этот вопрос уже обрабатывается · ожидаем ответ'); return; }
-  const entry = appendTranscript({ transcript: raw, question: result.question, answer: '' });
+  const row = appendTranscript(raw);
   if (result.corrections.length) {
     $('#speech-correction').hidden = false;
     $('#speech-correction').textContent = 'Понял как: ' + result.text + ' · ' + result.corrections.join(', ');
   } else $('#speech-correction').hidden = true;
-  if (!result.question) { status('Фраза услышана · ожидаем вопрос или его продолжение'); return; }
+  if (!result.question && (!assembling || turns.pending || beganAt - assembling.endedAt > questionPauseMs)) {
+    if (assembling && turns.pending) scheduleQuestion();
+    status('Фраза услышана · ожидаем вопрос или его продолжение');
+    return;
+  }
+  const fragment = result.question || result.text;
+  if (assembling && fragment === assembling.lastFragment) return;
+  if (assembling && beganAt - assembling.endedAt > questionPauseMs) {
+    finishQuestion();
+  }
+  const question = assembling ? (assembling.question + ' ' + fragment).slice(0, 12000) : fragment;
+  assembling = { question, lastFragment: fragment, endedAt, transcriptionMs, row };
+  setLastQuestion(question);
+  ui.receiveQuestion(question);
+  scheduleQuestion();
+  status('Собираем вопрос · короткая пауза считается продолжением');
+}
+async function generateSpeechAnswer({ question, endedAt, transcriptionMs }) {
+  const questionKey = question.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   metrics({ mode: live ? 'Live' : 'По фразам', transcriptionMs, firstWordsMs: null, totalMs: null, waiting: false });
-  if (answerMode.value === 'manual' || ui.busy()) { status('Вопрос распознан · готов к ответу по команде'); return; }
   status('Вопрос понят · готовим ответ');
   voiceBeganAt = endedAt;
   const id = ++voiceId, sessionId = epoch;
   inFlightQuestion = questionKey;
-  ui.beginSpeechAnswer(id, result.question);
+  ui.beginSpeechAnswer(id, question);
   try {
-    const answer = await window.ghost.speechAnswer({ ...ui.config(), id, question: result.question });
+    const answer = await window.ghost.speechAnswer({ ...ui.config(), id, question });
     if (id !== voiceId || sessionId !== epoch || !running) return;
     if (answer.error) { metrics({ waiting: false }); ui.endSpeechAnswer(id, true); ui.showError(answer.error); status(answer.partialAnswer ? 'Получена часть ответа · можно повторить вопрос' : 'Ответ не получен · вопрос сохранён для повтора'); return; }
-    entry.answer = answer.answer;
     metrics({ totalMs: performance.now() - endedAt });
     ui.endSpeechAnswer(id);
-    ui.presentResult(answer, result.question, true);
+    ui.presentResult(answer, question, true);
     status('Ответ готов · продолжаем слушать');
   } catch { if (id === voiceId && sessionId === epoch) { ui.endSpeechAnswer(id); ui.showError('Не удалось получить голосовой ответ. Повторите вопрос.'); } }
-  finally { if (id === voiceId) inFlightQuestion = ''; }
+  finally { if (id === voiceId) { inFlightQuestion = ''; dispatchQuestions(); } }
 }
 let voiceBeganAt = 0;
 window.ghost.onSpeechDelta(packet => {
@@ -114,10 +187,11 @@ window.ghost.onSpeechDelta(packet => {
 window.ghost.onSpeechNotice(packet => { if (running && packet.id === voiceId) { status(packet.message); metrics({ waiting: true }); } });
 window.ghost.onLiveSpeech(event => {
   if (!running || !live || event.sessionId !== epoch) return;
-  if (event.type === 'interim') heard(event.text, true);
+  if (event.type === 'interim') { lastInterimAt = performance.now(); heard(event.text, true); }
   if (event.type === 'final') {
+    lastInterimAt = 0;
     const endedAt = lastVoiceAt || performance.now();
-    acceptTranscript(event.text, endedAt, performance.now() - endedAt);
+    acceptTranscript(event.text, endedAt, performance.now() - endedAt, speechStartedAt || endedAt);
   }
   if (event.type === 'error') { ui.showError(event.message); stop(); }
 });
@@ -129,7 +203,11 @@ export function consumeAudioFrame(frame, rate) {
     pcmPackets = new PcmPackets(rate, buffer => { if (running && live && !monitorOnly) window.ghost.sendSpeechPcm(base64(buffer)); });
   }
   const rms = segments.push(frame); updateMeter(rms);
-  if (rms > segments.threshold) lastVoiceAt = performance.now();
+  if (rms > segments.threshold) {
+    const now = performance.now();
+    if (!lastVoiceAt || now - lastVoiceAt >= questionPauseMs) speechStartedAt = now;
+    lastVoiceAt = now;
+  }
   if (live && !monitorOnly) pcmPackets.push(frame);
 }
 async function drain() {
@@ -138,13 +216,13 @@ async function drain() {
   try {
     while (queue.length && running && drainEpoch === epoch) {
       const item = queue.shift(), sessionId = epoch;
-      if (performance.now() - item.endedAt > 8000) { status('Ожидавшая фраза устарела · слушаем новый вопрос'); continue; }
+      if (performance.now() - item.endedAt > 30000) { status('Ожидавшая фраза устарела · слушаем новый вопрос'); continue; }
       status('Распознаём фразу · ' + (queue.length ? 'следующая фраза ожидает' : 'без очереди'));
       const result = await window.ghost.transcribeAudio({ model: sessionConfig.recognitionModel, vocabulary: sessionVocabulary, audio: { data: base64(item.buffer), mimeType: 'audio/wav' } });
       if (sessionId !== epoch || !running) continue;
       if (result.error) { ui.showError(result.error); await stop(); return; }
       // Answer generation runs independently; transcription of the next phrase does not wait for it.
-      acceptTranscript(result.transcript, item.endedAt, performance.now() - item.endedAt);
+      acceptTranscript(result.transcript, item.endedAt, performance.now() - item.endedAt, item.beganAt);
     }
   } catch { if (drainEpoch === epoch) { ui.showError('Ошибка распознавания речи. Перезапустите слушание.'); await stop(); } }
   finally { processing = false; if (running && queue.length) drain(); }
@@ -152,8 +230,12 @@ async function drain() {
 function enqueue(buffer) {
   if (!running || monitorOnly) return;
   if (live) { pcmPackets?.flush(); window.ghost.endSpeechTurn(); return; }
-  if (queue.length >= 1) { queue[0] = { buffer, endedAt: lastVoiceAt || performance.now() }; status('Новая фраза заменила ожидающую · API занят'); }
-  else queue.push({ buffer, endedAt: lastVoiceAt || performance.now() });
+  const endedAt = lastVoiceAt || performance.now();
+  const item = { buffer, endedAt, beganAt: speechStartedAt || endedAt };
+  if (queue.length >= 4) {
+    queue[queue.length - 1] = item;
+    status('Новая фраза заменила ожидающую · API занят');
+  } else queue.push(item);
   drain();
 }
 let pickResolve;
@@ -232,7 +314,7 @@ async function start(testOnly = false) {
         fallback = connection.error + ' Работаем по фразам.';
       } else live = true;
     }
-    segments = null; frameRate = 0; pcmPackets = null; lastVoiceAt = 0; turns = new QuestionTurns(); latestMetrics = null;
+    segments = null; frameRate = 0; pcmPackets = null; lastVoiceAt = 0; speechStartedAt = 0; lastInterimAt = 0; turns = new QuestionTurns(); latestMetrics = null;
     running = true; monitorOnly = testOnly; started = Date.now();
     ui.showError(''); $('#speech-correction').hidden = true;
     if (!testOnly) metrics({ mode: live ? 'Live · звук передаётся во время речи' : 'По фразам · отправка после паузы' });
@@ -245,6 +327,10 @@ async function start(testOnly = false) {
 }
 async function stop() {
   if ($('#source-picker').open) { cancelPicker(); $('#source-picker').close(); }
+  clearTimeout(settleTimer);
+  clearTimeout(dispatchTimer);
+  assembling = null;
+  readyQuestions.length = 0;
   running = false; epoch++; voiceId++; inFlightQuestion = ''; ui.endSpeechAnswer(undefined, true); live = false; pcmPackets = null; frameRate = 0; queue = []; clearInterval(timer);
   stream?.getTracks().forEach(track => { track.onended = null; track.stop(); }); stream = null;
   if (worklet) { worklet.port.onmessage = null; worklet.disconnect(); } input?.disconnect();
@@ -284,11 +370,19 @@ $('#compact-snapshot').onclick = () => snapshot({ reuse: true });
 function answerLast() {
   if ($('#settings').open || $('#source-picker').open) return;
   if (!lastQuestion) { ui.showError('Вопрос ещё не распознан. Начните слушать.'); return; }
+  if (ui.busy()) return;
+  if (assembling && answerMode.value === 'manual') {
+    clearTimeout(settleTimer);
+    finishQuestion();
+  } else if (assembling) {
+    clearTimeout(settleTimer);
+    assembling = null;
+  }
   return ui.ask(lastQuestion, { image: null });
 }
 $('#answer-last').onclick = answerLast;
 $('#answer-heard').onclick = answerLast;
-$('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; setLastQuestion(''); $('#transcript').textContent = 'Диалог очищен.'; };
+$('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; answeredTurns = []; setLastQuestion(''); $('#transcript').textContent = 'Диалог очищен.'; };
 window.ghost.onAnswerLast(answerLast); window.ghost.onSnapshot(() => snapshot({ reuse: true }));
 function cancelAnswer() {
   voiceId++;
@@ -296,5 +390,5 @@ function cancelAnswer() {
   ui.endSpeechAnswer(undefined, true);
   return window.ghost.cancelSpeechAnswer();
 }
-window.ghostSession = { conversation, active: () => running || starting, stop, metrics: () => latestMetrics, cancelAnswer };
+window.ghostSession = { conversation, rememberAnswer, active: () => running || starting, stop, metrics: () => latestMetrics, cancelAnswer };
 window.addEventListener('beforeunload', () => { stream?.getTracks().forEach(t => t.stop()); window.ghost.armMedia(false); });

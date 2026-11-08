@@ -139,6 +139,7 @@ function renderHistory() {
   navigation();
 }
 function presentResult(result, question, audio = false) {
+  window.ghostSession?.rememberAnswer(question, result.answer);
   const entry = { question, answer: result.answer };
   const follow = !audio || (!busy && !readingHistory);
   history.unshift(entry);

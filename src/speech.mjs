@@ -18,7 +18,7 @@ export function normalizeTerms(text) {
 // Fast path handles explicit questions/requests without another model round trip.
 export class QuestionTurns {
   constructor() { this.pending = ''; this.last = ''; this.lastAt = 0; }
-  accept(raw, now = Date.now()) {
+  accept(raw, now = Date.now(), hasContext = false) {
     let normalized = normalizeTerms(raw.trim());
     if (!normalized.text) return { question: '', ...normalized };
     if (now - this.lastAt > 20000) this.pending = '';
@@ -26,9 +26,10 @@ export class QuestionTurns {
     normalized = normalizeTerms((this.pending + ' ' + raw.trim()).trim().slice(-3000));
     const text = normalized.text;
     const explicit = /\?|(?:^|[.!:]\s*)(?:what|why|how|when|where|explain|describe|compare|tell me|write|solve|can you|could you|have you|do you|are you)\b/iu.test(text);
-    const russian = /(?:^|[.!:]\s*)(?:(?:а|ну|тогда)\s+)?(?:что|как|чем|почему|зачем|какие|какой|какая|какое|каких|какими|каковы|когда|где|сколько|особенности|разница)(?=$|[^\p{L}])|(?:^|[^\p{L}])(?:расскажите|расскажи|объясните|объясни|сравните|сравни|назовите|опишите|решите|напишите|покажите)(?=$|[^\p{L}])/iu.test(text);
+    const russian = /(?:^|[.!:]\s*)(?:(?:а|и|ну|тогда)\s+)?(?:что|как|чем|почему|зачем|какие|какой|какая|какое|каких|какими|каковы|когда|где|сколько|особенности|разница)(?=$|[^\p{L}])|(?:^|[^\p{L}])(?:расскажите|расскажи|объясните|объясни|сравните|сравни|назовите|опишите|решите|напишите|покажите)(?=$|[^\p{L}])/iu.test(text);
+    const followUp = hasContext && /^(?:а (?:если|для|в|на|с|без|при)\s+|(?:можно\s+)?(?:пример|подробнее|поподробнее)(?:[.!?\s]|$)|(?:and )?(?:what about|for example)\b)/iu.test(text);
     const unfinished = /(?:^|[^\p{L}])(?:об|о|про|в|на|и|языка|языке|такое|такой|отличается|отличаются|между|особенностях|особенности|about|between|what is|how to)[\s.,]*$/iu.test(text);
-    if ((!explicit && !russian) || unfinished || text.length < 8) { this.pending = explicit || russian ? text : ''; return { ...normalized, question: '' }; }
+    if ((!explicit && !russian && !followUp) || unfinished || text.length < 4) { this.pending = explicit || russian || followUp ? text : ''; return { ...normalized, question: '' }; }
     this.pending = '';
     const key = text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
     if (key === this.last && now - (this.answeredAt || 0) < 10000) return { ...normalized, question: '' };

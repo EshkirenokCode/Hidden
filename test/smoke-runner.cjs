@@ -143,7 +143,10 @@ module.exports = async ({ app, win, toggleWindow }) => {
       await new Promise(resolve => setTimeout(resolve, 300));
       if (document.querySelector('#answer-question').textContent==='Как работает TCP?') throw Error('Manual mode answered a later question automatically');
       document.querySelector('#answer-heard').click();
-      await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response: Как работает TCP?') && !document.querySelector('#submit').disabled);
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response: Что такое DNS? Как работает TCP?') && !document.querySelector('#submit').disabled);
+      await acceptTranscript('А для HTTPS?', performance.now() + 2000, 0);
+      document.querySelector('#answer-heard').click();
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response: А для HTTPS?') && !document.querySelector('#submit').disabled);
       setMode('auto');
       document.querySelector('#stop-session').click();
       await waitFor(() => !window.ghostSession.active() && document.querySelector('#stop-session').disabled);
@@ -151,6 +154,7 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#start-session').click();
       await waitFor(() => !document.querySelector('#stop-session').disabled);
       await waitFor(() => document.querySelector('#answer').textContent.includes('Groq smoke response:') && document.querySelector('#answer').textContent.includes('Go (Golang)') && window.ghostSession.metrics()?.firstWordsMs != null);
+      if (!document.querySelector('#answer-question').textContent.includes('И где его используют?')) throw Error('A pause split the automatic answer');
       if (window.ghostSession.metrics().totalMs != null || document.querySelector('#answer').textContent.includes('must not show')) throw Error('Groq did not stream visible text cleanly');
       await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
       document.querySelector('#stop-session').click();
@@ -161,15 +165,15 @@ module.exports = async ({ app, win, toggleWindow }) => {
       if(!window.ghostSession.active()) throw Error('Audio start failed');
       await waitFor(() => document.querySelector('#answer').textContent.includes('Go (Golang)') && window.ghostSession.metrics()?.firstWordsMs != null);
       if(window.ghostSession.metrics().totalMs != null) throw Error('Audio answer only appeared after completion');
-      if(!document.querySelector('#speech-correction').textContent.includes('Go (Golang)')) throw Error('Term correction not disclosed');
+      if(!document.querySelector('#question').value.includes('Go (Golang)')) throw Error('Term correction not disclosed');
       await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
       if(!window.ghostSession.conversation().includes('Gemini smoke response')) throw Error('Audio answer missing from conversation');
-      const delayedAnswer=acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
+      acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
       await new Promise(r=>setTimeout(r,10500));
       if(!window.ghostSession.metrics().waiting || !document.querySelector('#speech-metrics').textContent.includes('запрос продолжается')) throw Error('Slow request not shown in the compact-visible status');
       await acceptTranscript('Что такое DELAYED_TEST?',performance.now(),0);
       if(!document.querySelector('#session-status').textContent.includes('уже обрабатывается')) throw Error('In-flight repeated question restarted');
-      await delayedAnswer;
+      await waitFor(() => window.ghostSession.metrics()?.totalMs != null);
       if(!document.querySelector('#answer').textContent.includes('DELAYED_TEST') || window.ghostSession.metrics().totalMs == null) throw Error('12-second delayed voice answer was lost');
       window.copilot.beginSpeechAnswer(99999,'Partial question');
       window.copilot.speechDelta(99999,'Preserved partial text');

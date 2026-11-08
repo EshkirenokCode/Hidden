@@ -4,7 +4,12 @@ module.exports = async (url, options) => {
     if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] ||
         body.model !== 'openai/gpt-oss-20b' || !body.stream || body.reasoning_effort !== 'low' ||
         body.include_reasoning !== false || body.messages.some(message => typeof message.content !== 'string')) throw Error('Wrong Groq routing');
-    const answer = 'Groq smoke response: ' + body.messages[1].content.split('Вопрос:\n').at(-1);
+    const input = body.messages[1].content;
+    const question = input.split('Вопрос:\n').at(-1);
+    if (question === 'А для HTTPS?' && !input.includes('Ответ Hidden: Groq smoke response: Что такое DNS? Как работает TCP?')) {
+      throw Error('Follow-up request is missing the previous manual answer');
+    }
+    const answer = 'Groq smoke response: ' + question;
     return { ok: true, body: (async function* () {
       const event = (delta, finish_reason = null) => 'data: ' + JSON.stringify({ choices: [{ delta, finish_reason }] }) + '\r\n\r\n';
       const bytes = new TextEncoder().encode(event({ reasoning: 'must not show' }) + event({ content: answer }));
