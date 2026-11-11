@@ -7,7 +7,8 @@ module.exports = async (url, options) => {
     if (body.model === 'openai/gpt-oss-120b') {
       if (typeof input !== 'string' || !input.includes('OCR smoke task: What is 2 + 2?') ||
           body.messages.some(message => typeof message.content !== 'string') ||
-          body.reasoning_effort !== 'medium' || body.include_reasoning !== false) throw Error('Wrong OCR routing');
+          !body.messages[0].content.includes('Игнорируй навигацию') ||
+          !input.includes('полностью видимый вопрос') || body.reasoning_effort !== 'medium' || body.include_reasoning !== false) throw Error('Wrong OCR routing');
       answer = 'GPT-OSS OCR response';
     } else if (body.model === 'qwen/qwen3.8-27b') {
       if (!Array.isArray(input) || input.length !== 2 || input[0]?.type !== 'text' ||
@@ -56,7 +57,7 @@ module.exports = async (url, options) => {
       if (!prompt.includes('Помощник: Gemini screen response')) throw Error('Screen follow-up lost previous answer');
       answer = 'Gemini follow-up with screenshot';
     } else {
-      if (prompt.includes('Найди все читаемые') && !prompt.includes('Ответь на каждый')) throw Error('Screen prompt ignored multiple items');
+      if (prompt.includes('Реши задачи в основном содержимом окна') && !prompt.includes('Ответь на каждый')) throw Error('Screen prompt ignored multiple items');
       answer = 'Gemini screen response';
     }
   }
