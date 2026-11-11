@@ -250,8 +250,14 @@ app.whenReady().then(async () => {
         firstTokenMs ??= Math.round(performance.now() - started);
         if (!event.sender.isDestroyed()) event.sender.send('answer:delta', { text });
       } : undefined;
-      const answer = await generate(request, keys[provider], fetchImpl, { signal, onDelta });
-      return { answer, firstTokenMs, provider, model: request.image ? screenModel : request.model };
+      let model = request.image ? screenModel : request.model;
+      const answer = await generate(request, keys[provider], fetchImpl, {
+        signal, onDelta, onScreenFallback: fallbackModel => {
+          model = fallbackModel;
+          if (!event.sender.isDestroyed()) event.sender.send('answer:notice', 'Gemini задерживается · пробуем быстрый режим…');
+        }
+      });
+      return { answer, firstTokenMs, provider, model };
     });
   });
   ipcMain.handle('answer:cancel', event => { trusted(event); controllers.get('answer')?.abort(); });

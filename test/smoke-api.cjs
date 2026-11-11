@@ -29,7 +29,7 @@ module.exports = async (url, options) => {
   }
   if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) {
     const image = body.input.find(item => item.type === 'image');
-    if (body.model !== 'gemini-3.8-flash' || body.generation_config?.thinking_level !== 'high' || image.resolution !== 'high') {
+    if (body.model !== 'gemini-3.8-flash' || body.generation_config?.thinking_level !== 'medium' || image.resolution !== 'high') {
       throw Error('Screen request did not use the reasoning model and image detail');
     }
     const prompt = body.input.find(item => item.type === 'text')?.text || '';

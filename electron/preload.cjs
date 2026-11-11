@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('ghost', {
   generate: request => ipcRenderer.invoke('answer:generate', request),
   cancel: () => ipcRenderer.invoke('answer:cancel'),
   onDelta: callback => listen('answer:delta', callback),
+  onAnswerNotice: callback => listen('answer:notice', callback),
   analyzeAudio: request => ipcRenderer.invoke('audio:analyze', request),
   transcribeAudio: request => ipcRenderer.invoke('speech:transcribe', request),
   startLiveSpeech: request => ipcRenderer.invoke('speech:live-start', request),

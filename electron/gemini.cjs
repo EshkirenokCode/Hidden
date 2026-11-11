@@ -1,5 +1,6 @@
 const { continuity, formatDialogue } = require('./dialogue.cjs');
 const screenModel = 'gemini-3.8-flash';
+const screenFallbackModel = 'gemini-3.5-flash-lite';
 const screenInstructions = [
   'Реши каждый полностью видимый пункт, который просит пользователь, в порядке исходной нумерации.',
   'Учитывай явно указанные версии языка и настройки компилятора. Читай код посимвольно: важны отступы, операторы, границы срезов и индексы.',
@@ -34,15 +35,21 @@ async function call(body, key, fetchImpl = fetch, options = {}) {
       body: JSON.stringify({ store: false, ...body, ...(options.onDelta ? { stream: true } : {}) })
     });
   } catch (error) {
-    if (error.name === 'AbortError' || error.name === 'TimeoutError' || signal.aborted) throw error;
+    signal.throwIfAborted();
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') throw error;
     throw Error('Не удалось подключиться к Gemini. Проверьте интернет и доступ к API.');
   }
   if (!response.ok) {
     const messages = { 400: 'Gemini отклонил запрос: проверьте ключ, модель и параметры.', 401: 'Gemini API key не принят. Скопируйте ключ заново без пробелов и знаков в конце.', 403: 'Gemini: нет доступа. Проверьте ограничения ключа, регион и проект.', 404: 'Модель Gemini не найдена или недоступна проекту.', 429: 'Gemini: квота исчерпана. Остановите сессию, проверьте лимиты и биллинг.' };
     throw Error(messages[response.status] || `Ошибка Gemini API (${response.status}).`);
   }
-  if (options.onDelta) return readStream(response.body, options.onDelta);
-  return extract(await response.json());
+  try {
+    if (options.onDelta) return await readStream(response.body, options.onDelta);
+    return extract(await response.json());
+  } catch (error) {
+    signal.throwIfAborted();
+    throw error;
+  }
 }
 async function readStream(body, onDelta) {
   let pending = '', answer = '', completed = false;
@@ -80,13 +87,46 @@ async function generateGemini(request, key, fetchImpl = fetch, options = {}) {
     ? 'Начни с прямого ответа, затем 2–3 тезиса. Не более 150 слов.'
     : 'Дай подробное объяснение с примером.';
   const screen = Boolean(request.image);
-  return call({
-    model: screen ? screenModel : request.model,
+  const body = {
+    model: request.model,
     system_instruction: [instruction, continuity, screen ? screenInstructions : style, request.customPrompt].filter(Boolean).join(' '),
     input: screen ? [{ type: 'text', text: prompt }, { ...media(request.image, 'image'), resolution: 'high' }] : prompt,
-    generation_config: screen ? { thinking_level: 'high' } : settings(request.model)
-  }, key, fetchImpl, screen ? { ...options, timeoutMs: 120000 } : options);
+    generation_config: settings(request.model)
+  };
+  if (!screen) return call(body, key, fetchImpl, options);
+
+  const firstText = new AbortController();
+  const firstTextMs = options.screenFirstTextMs ?? 14000;
+  const timer = setTimeout(() => firstText.abort(new DOMException('No screen answer text', 'TimeoutError')), firstTextMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, firstText.signal]) : firstText.signal;
+  try {
+    return await call({ ...body, model: screenModel, generation_config: { thinking_level: 'medium' } }, key, fetchImpl, {
+      ...options, signal, timeoutMs: 60000,
+      onDelta: options.onDelta && (text => {
+        if (text.trim()) clearTimeout(timer);
+        if (!signal.aborted) options.onDelta(text);
+      })
+    });
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    if (!firstText.signal.aborted) throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  options.onScreenFallback?.(screenFallbackModel);
+  try {
+    return await call({ ...body, model: screenFallbackModel, generation_config: { thinking_level: 'low' } }, key, fetchImpl, {
+      ...options, timeoutMs: 35000
+    });
+  } catch (error) {
+    if (error.name === 'TimeoutError' && !options.signal?.aborted) {
+      throw Error('Gemini не успел разобрать снимок. Попробуйте выбрать окно с меньшим числом заданий.');
+    }
+    throw error;
+  }
 }
+
 const audioSchema = { type: 'object', properties: { transcript: { type: 'string' }, question: { type: 'string' }, answer: { type: 'string' } }, required: ['transcript', 'question', 'answer'] };
 async function transcribeAudio(request, key, fetchImpl = fetch, options = {}) {
   if (!request || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model || '') || !Array.isArray(request.vocabulary) || request.vocabulary.length > 100 || request.vocabulary.some(x => typeof x !== 'string' || x.length > 80)) throw Error('Некорректные настройки распознавания.');

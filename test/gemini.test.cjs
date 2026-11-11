@@ -34,3 +34,66 @@ test('audio schema validates output and manual mode suppresses automatic answers
   });assert.equal(result.answer,'');
   assert.throws(()=>media({data:'bad!',mimeType:'image/png'},'image'),/медиафайл/);
 });
+
+const screenRequest = {
+  model: 'gemini-3.5-flash-lite', context: '', question: 'Что выведет код на снимке?', style: 'brief',
+  image: { data: 'aW1hZ2U=', mimeType: 'image/png' }
+};
+const delta = text => ({ event_type: 'step.delta', delta: { type: 'text', text } });
+const completed = { event_type: 'interaction.completed', interaction: { status: 'completed' } };
+const waitForAbort = signal => new Promise((_, reject) => {
+  if (signal.aborted) reject(signal.reason);
+  else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+});
+
+test('screen reasoning with no visible text switches to a faster model on the same image', async () => {
+  const requests = [];
+  const shown = [];
+  const notices = [];
+  const answer = await generateGemini(screenRequest, 'test', async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    if (requests.length === 1) {
+      return { ok: true, body: (async function* () {
+        yield* stream([{ event_type: 'step.delta', delta: { type: 'thought_summary', text: 'Working' } }]);
+        await waitForAbort(options.signal);
+      })() };
+    }
+    assert.equal(options.signal.aborted, false);
+    return { ok: true, body: stream([delta('Результат: 42'), completed]) };
+  }, { screenFirstTextMs: 20, onDelta: text => shown.push(text), onScreenFallback: model => notices.push(model) });
+  assert.equal(answer, 'Результат: 42');
+  assert.deepEqual(shown, ['Результат: 42']);
+  assert.deepEqual(notices, ['gemini-3.5-flash-lite']);
+  assert.deepEqual(requests.map(body => [body.model, body.generation_config.thinking_level]), [
+    ['gemini-3.8-flash', 'medium'], ['gemini-3.5-flash-lite', 'low']
+  ]);
+  assert.deepEqual(requests[0].input, requests[1].input);
+});
+
+test('a screen answer that has started is allowed to finish after the initial deadline', async () => {
+  let calls = 0;
+  const answer = await generateGemini(screenRequest, 'test', async (_url, options) => {
+    calls++;
+    return { ok: true, body: (async function* () {
+      yield* stream([delta('Пункт 1')]);
+      await new Promise(resolve => setTimeout(resolve, 40));
+      options.signal.throwIfAborted();
+      yield* stream([delta(', пункт 2'), completed]);
+    })() };
+  }, { screenFirstTextMs: 20, onDelta: () => {} });
+  assert.equal(calls, 1);
+  assert.equal(answer, 'Пункт 1, пункт 2');
+});
+
+test('cancelling a screen request does not send it again', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const pending = generateGemini(screenRequest, 'test', async (_url, options) => {
+    calls++;
+    controller.abort();
+    await waitForAbort(options.signal);
+  }, { signal: controller.signal, onDelta: () => {} });
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(calls, 1);
+});

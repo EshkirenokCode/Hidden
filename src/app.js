@@ -267,6 +267,7 @@ $('#clear').onclick = () => { history = []; selectedEntry = null; readingHistory
 $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(currentAnswer); $('#copy').textContent = 'Скопировано'; setTimeout(() => { $('#copy').textContent = 'Копировать'; }, 1500); } catch { showError('Не удалось скопировать.'); } };
 $('#demo').onclick = () => { $('#answer-question').textContent = 'Пример ответа · не отправляется в API'; showAnswer('Демонстрация · подготовленный пример\n\nOptimistic locking проверяет версию записи при обновлении. Если версия изменилась, операция повторяется или возвращает конфликт.\n\nPessimistic locking блокирует запись на время транзакции. Другие операции ждут. Подходит при частых конфликтах, но требует коротких транзакций и контроля deadlock.'); };
 let answerPaint;
+window.ghost.onAnswerNotice(message => { if (busy) $('#timing').textContent = message; });
 window.ghost.onDelta(({ text }) => {
   if (!busy) return;
   streamingText += text;
