@@ -77,7 +77,7 @@ async function generateGemini(request, key, fetchImpl = fetch, options = {}) {
   const screen = Boolean(request.image);
   const body = {
     model: request.model,
-    system_instruction: [instruction, continuity, screen ? screenInstructions : style, request.customPrompt].filter(Boolean).join(' '),
+    system_instruction: [instruction, continuity, screen ? '' : style, request.customPrompt, screen ? screenInstructions : ''].filter(Boolean).join(' '),
     input: screen ? [{ type: 'text', text: prompt }, { ...media(request.image, 'image'), resolution: 'high' }] : prompt,
     generation_config: settings(request.model)
   };

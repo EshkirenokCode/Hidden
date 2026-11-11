@@ -220,6 +220,9 @@ window.ghost.onWindowState(state => { syncWindow(state); syncShortcuts(state.sho
 $('#hide-stop').onclick = () => window.ghost.hideStop();
 window.ghost.onStop(() => { window.ghostSession?.stop(); $('#remove-snapshot').click(); showError(''); });
 loadProvider();
+if (!/Mac|Win/.test(navigator.platform)) {
+  $('#key-storage-note').textContent = 'Ключ хранится до выхода из приложения. Пустое поле сохраняет текущий ключ.';
+}
 $('#provider').onchange = () => { if (window.ghostSession?.active()) window.ghostSession.stop(); loadProvider(); save('ghost.provider', $('#provider').value); updateStatus(); };
 $('#hide-window').onclick = () => window.ghost.hide();
 $('#context').oninput = () => { save('ghost.context', $('#context').value); $('#context-status').textContent = 'Сохранено на этом устройстве'; };
@@ -272,13 +275,17 @@ $('#test-key').onclick = async () => {
   catch (error) { $('#settings-error').textContent = error.message; }
   finally { $('#test-key').disabled = false; }
 };
-$('#forget-groq-screen').onclick = async () => {
-  await window.ghost.setKey('groq', '');
-  $('#groq-screen-key').value = '';
-  await updateStatus();
-};
-$('#forget-key').onclick = async () => { await window.ghost.setKey($('#provider').value, ''); $('#api-key').value = ''; await updateStatus(); };
-$('#forget-gemini').onclick = async () => { await window.ghost.setKey('gemini', ''); $('#gemini-key').value = ''; await updateStatus(); };
+async function forgetKey(provider, input) {
+  try {
+    await window.ghost.setKey(provider, '');
+    $(input).value = '';
+    $('#settings-error').textContent = '';
+    await updateStatus();
+  } catch (error) { $('#settings-error').textContent = error.message; }
+}
+$('#forget-groq-screen').onclick = () => forgetKey('groq', '#groq-screen-key');
+$('#forget-key').onclick = () => forgetKey($('#provider').value, '#api-key');
+$('#forget-gemini').onclick = () => forgetKey('gemini', '#gemini-key');
 $('#test-live').onclick = async () => {
   const button = $('#test-live'); button.disabled = true;
   $('#settings-error').textContent = 'Проверяем доступ к Live · без передачи аудио…';
@@ -319,7 +326,7 @@ $('#remove-snapshot').onclick = () => {
 $('#snapshot-text').oninput = () => {
   if (pendingImage) pendingImage.screenText = $('#snapshot-text').value;
 };
-const screenQuestion = 'Реши задачи в основном содержимом окна. Ответь на каждый полностью видимый вопрос в исходном порядке. Если следующий вопрос обрезан, кратко укажи, чего не хватает. Начни с номера и ответа, затем дай короткое объяснение.';
+const screenQuestion = 'Реши задачи в основном содержимом окна. Ответь на каждый полностью видимый вопрос в исходном порядке. В начале дай список конечных ответов и отметь обрезанные задания. Разбор вынеси после этого списка. Обрезанные задания пропусти без решения.';
 async function ask(question, { image = pendingImage, preserveDraft = false, title, heard = false } = {}) {
   if (busy) return;
   if (!question.trim() && !image) { showError('Введите вопрос или дождитесь распознавания речи.'); return; }

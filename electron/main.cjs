@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, Menu, Tray, dialog, systemPreferences, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, Menu, Tray, dialog, safeStorage, systemPreferences, screen } = require('electron');
 const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
+const { createKeyStorage } = require('./key-storage.cjs');
 const { recognizeScreenText } = require('./screen-text.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
 const { LiveTranscriber } = require('./live-transcriber.cjs');
@@ -23,6 +24,10 @@ if (smoke) {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 }
 const menuBarMode = process.platform === 'darwin';
+// The async Linux backend can fall back to storage without an OS secret store.
+const keyStorage = !smoke && ['darwin', 'win32'].includes(process.platform)
+  ? createKeyStorage(app.getPath('userData'), safeStorage) : null;
+const pendingKeyUpdates = new Map();
 let tray, quitting = false;
 let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = null, captureMode = null;
 let lastCaptureDenial = '';
@@ -178,6 +183,15 @@ function createWindow() {
   }
 }
 app.whenReady().then(async () => {
+  if (keyStorage) {
+    await Promise.all(Object.keys(keys).map(async provider => {
+      try {
+        keys[provider] = await keyStorage.read(provider) || keys[provider];
+      } catch {
+        console.warn(`Could not unlock the saved ${provider} key.`);
+      }
+    }));
+  }
   if (menuBarMode) {
     app.setActivationPolicy('accessory');
     await app.dock.hide();
@@ -198,15 +212,31 @@ app.whenReady().then(async () => {
     } catch { displaySource = null; callback({}); }
   }, { useSystemPicker: nativePicker });
   ipcMain.handle('key:status', (event, provider) => { trusted(event); return Boolean(keys[providerName(provider)]); });
-  ipcMain.handle('key:set', (event, provider, key) => {
+  ipcMain.handle('key:set', async (event, provider, key) => {
     trusted(event); providerName(provider);
     if (typeof key !== 'string' || key.length > 512) throw Error('Некорректный ключ.');
-    if (provider === 'gemini' && key.trim().endsWith('.')) throw Error('В конце ключа точка. Скопируйте ключ без знака пунктуации.');
-    if (provider === 'gemini' && keys.gemini !== key.trim() && mediaArmed) {
-      mediaArmed = false; captureMode = null; nativeAudio?.stop(); stopSpeech(); controllers.get('audio')?.abort();
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('session:stop');
+    const trimmed = key.trim();
+    if (provider === 'gemini' && trimmed.endsWith('.')) throw Error('В конце ключа точка. Скопируйте ключ без знака пунктуации.');
+    const previous = pendingKeyUpdates.get(provider) || Promise.resolve();
+    const update = previous.catch(() => {}).then(async () => {
+      try {
+        await keyStorage?.save(provider, trimmed);
+      } catch {
+        throw Error(trimmed ? 'Не удалось сохранить ключ в защищённом хранилище. Проверьте доступ к хранилищу системы и повторите.'
+          : 'Не удалось удалить сохранённый ключ. Повторите попытку.');
+      }
+      if (provider === 'gemini' && keys.gemini !== trimmed && mediaArmed) {
+        mediaArmed = false; captureMode = null; nativeAudio?.stop(); stopSpeech(); controllers.get('audio')?.abort();
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('session:stop');
+      }
+      keys[provider] = trimmed;
+      return Boolean(trimmed);
+    });
+    pendingKeyUpdates.set(provider, update);
+    try { return await update; }
+    finally {
+      if (pendingKeyUpdates.get(provider) === update) pendingKeyUpdates.delete(provider);
     }
-    keys[provider] = key.trim(); return Boolean(keys[provider]);
   });
   ipcMain.handle('key:test', (event, model, provider = 'gemini') => {
     trusted(event); providerName(provider);

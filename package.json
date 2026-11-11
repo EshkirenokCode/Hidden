@@ -1,6 +1,6 @@
 {
   "name": "hidden",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "description": "Hidden desktop interview copilot",
   "main": "electron/main.cjs",
   "directories": {

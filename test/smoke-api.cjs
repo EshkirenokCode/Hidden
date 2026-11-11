@@ -1,3 +1,10 @@
+function checkScreenInstructions(instructions) {
+  if (!instructions.includes('«Ответы», «Обрезано», «Разбор»') ||
+      !instructions.includes('Пропусти такие задания в ответах и разборе')) {
+    throw Error('Screen request is missing the answer order or clipping policy');
+  }
+}
+
 module.exports = async (url, options) => {
   if (url === 'https://api.groq.com/openai/v1/chat/completions') {
     const body = JSON.parse(options.body);
@@ -5,12 +12,14 @@ module.exports = async (url, options) => {
     const input = body.messages.at(-1).content;
     let answer;
     if (body.model === 'openai/gpt-oss-120b') {
+      checkScreenInstructions(body.messages[0].content);
       if (typeof input !== 'string' || !input.includes('OCR smoke task: What is 2 + 2?') ||
           body.messages.some(message => typeof message.content !== 'string') ||
           !body.messages[0].content.includes('Игнорируй навигацию') ||
           !input.includes('полностью видимый вопрос') || body.reasoning_effort !== 'medium' || body.include_reasoning !== false) throw Error('Wrong OCR routing');
       answer = 'GPT-OSS OCR response';
     } else if (body.model === 'qwen/qwen3.8-27b') {
+      checkScreenInstructions(body.messages[0].content);
       if (!Array.isArray(input) || input.length !== 2 || input[0]?.type !== 'text' ||
           input[1]?.type !== 'image_url' || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(input[1].image_url.url) ||
           body.reasoning_effort !== 'medium' || body.reasoning_format !== 'hidden' || body.include_reasoning !== undefined) throw Error('Wrong Qwen screen request');
@@ -48,6 +57,7 @@ module.exports = async (url, options) => {
     answer='Что такое DNS?';
   }
   if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) {
+    checkScreenInstructions(body.system_instruction);
     const image = body.input.find(item => item.type === 'image');
     if (body.model !== 'gemini-3.8-flash' || body.generation_config?.thinking_level !== 'medium' || image.resolution !== 'high') {
       throw Error('Screen request did not use the reasoning model and image detail');
