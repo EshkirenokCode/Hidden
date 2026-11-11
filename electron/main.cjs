@@ -8,7 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { generate } = require('./provider.cjs');
-const { analyzeAudio, transcribeAudio, call } = require('./gemini.cjs');
+const { analyzeAudio, transcribeAudio, call, screenModel } = require('./gemini.cjs');
 const keys = { groq: process.env.GROQ_API_KEY || '', openai: process.env.OPENAI_API_KEY || '', gemini: process.env.GEMINI_API_KEY || '' };
 // Preserve the development profile when changing the product name.
 app.setPath('userData', path.join(app.getPath('appData'), 'ghost-workspace'));
@@ -251,7 +251,7 @@ app.whenReady().then(async () => {
         if (!event.sender.isDestroyed()) event.sender.send('answer:delta', { text });
       } : undefined;
       const answer = await generate(request, keys[provider], fetchImpl, { signal, onDelta });
-      return { answer, firstTokenMs, provider, model: request.model };
+      return { answer, firstTokenMs, provider, model: request.image ? screenModel : request.model };
     });
   });
   ipcMain.handle('answer:cancel', event => { trusted(event); controllers.get('answer')?.abort(); });
@@ -325,9 +325,12 @@ app.whenReady().then(async () => {
     trusted(event);
     try {
       if (!sourceIds.has(id)) throw Error('Сначала выберите окно.');
-      const source = (await sources({ width: 1920, height: 1080 })).find(s => s.id === id);
+      const source = (await sources({ width: 2560, height: 1600 })).find(s => s.id === id);
       if (!source || source.thumbnail.isEmpty()) throw Error('Окно недоступно. Проверьте разрешение записи экрана.');
-      return { image: { data: source.thumbnail.toPNG().toString('base64'), mimeType: 'image/png' }, name: source.name };
+      const png = source.thumbnail.toPNG();
+      const lossless = png.length <= 6_000_000;
+      const data = lossless ? png : source.thumbnail.toJPEG(94);
+      return { image: { data: data.toString('base64'), mimeType: lossless ? 'image/png' : 'image/jpeg' }, name: source.name };
     } catch (error) { return fail(error); }
   });
   ipcMain.handle('context:import', async event => {

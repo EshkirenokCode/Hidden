@@ -28,6 +28,10 @@ module.exports = async (url, options) => {
     answer='Что такое DNS?';
   }
   if (Array.isArray(body.input) && body.input.some(item => item.type === 'image')) {
+    const image = body.input.find(item => item.type === 'image');
+    if (body.model !== 'gemini-3.8-flash' || body.generation_config?.thinking_level !== 'high' || image.resolution !== 'high') {
+      throw Error('Screen request did not use the reasoning model and image detail');
+    }
     const prompt = body.input.find(item => item.type === 'text')?.text || '';
     if (prompt.endsWith('Ответь на все семь вопросов')) {
       if (!prompt.includes('Помощник: Gemini screen response')) throw Error('Screen follow-up lost previous answer');

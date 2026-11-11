@@ -293,6 +293,7 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
     if (image) { request.provider = 'gemini'; request.model = request.recognitionModel; }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
     $('#answer-question').textContent = title || question;
+    if (image) $('#timing').textContent = 'Gemini проверяет задачи на снимке…';
     const result = await window.ghost.generate({ ...request, question, ...(image ? { image } : {}) });
     if (result.error) throw Error(result.error);
     presentResult(result, title || question, false, title ? title + '\n' + question : question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
