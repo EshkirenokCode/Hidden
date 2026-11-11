@@ -250,7 +250,7 @@ app.whenReady().then(async () => {
         firstTokenMs ??= Math.round(performance.now() - started);
         if (!event.sender.isDestroyed()) event.sender.send('answer:delta', { text });
       } : undefined;
-      let model = request.image ? screenModel : request.model;
+      let model = request.image && provider === 'gemini' ? screenModel : request.model;
       const answer = await generate(request, keys[provider], fetchImpl, {
         signal, onDelta, onScreenFallback: fallbackModel => {
           model = fallbackModel;

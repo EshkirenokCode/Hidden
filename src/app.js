@@ -85,6 +85,11 @@ $('#recognition-mode').value = ['auto','live','batch'].includes(read('hidden.rec
 $('#recognition-mode').onchange = () => save('hidden.recognitionMode', $('#recognition-mode').value);
 const providerLabels = { gemini: 'Gemini', groq: 'Groq', openai: 'OpenAI' };
 const groqModel = 'openai/gpt-oss-20b';
+const groqScreenModel = 'qwen/qwen3.8-27b';
+const screenProvider = () => read('ghost.screenProvider', 'gemini') === 'groq' ? 'groq' : 'gemini';
+function updateScreenKeyVisibility() {
+  $('#groq-screen-key-settings').hidden = $('#provider').value === 'groq' || $('#screen-provider').value !== 'groq';
+}
 const geminiModel = () => String($('#provider').value === 'gemini' ? $('#model').value.trim() : read('ghost.model.gemini', 'gemini-3.5-flash-lite')) || 'gemini-3.5-flash-lite';
 $('#provider').value = ['openai', 'gemini', 'groq'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
 function loadProvider() {
@@ -94,6 +99,7 @@ function loadProvider() {
   $('#key-label').textContent = `${providerLabels[provider]} API key`;
   $('#test-key').textContent = `Проверить ${providerLabels[provider]}`;
   $('#gemini-key-settings').hidden = provider === 'gemini';
+  updateScreenKeyVisibility();
   $('#gemini-key').value = '';
   $('#settings-error').textContent = '';
   $('#api-key').value = ''; $('#model').setAttribute('list', provider === 'gemini' ? 'model-options' : '');
@@ -155,10 +161,11 @@ function presentResult(result, question, audio = false, memoryQuestion = questio
 }
 async function updateStatus() {
   const provider = $('#provider').value;
-  const [connected, gemini] = await Promise.all([window.ghost.keyStatus(provider), window.ghost.keyStatus('gemini')]);
+  const [connected, gemini, groq] = await Promise.all([window.ghost.keyStatus(provider), window.ghost.keyStatus('gemini'), window.ghost.keyStatus('groq')]);
   if (provider !== $('#provider').value) return;
   $('#connection').textContent = `${providerLabels[provider]} · ${connected ? 'ключ добавлен' : 'API не подключён'}`;
   $('#gemini-key-status').textContent = gemini ? 'Ключ Gemini добавлен' : 'Ключ Gemini не добавлен';
+  $('#groq-screen-key-status').textContent = groq ? 'Ключ Groq добавлен' : 'Ключ Groq не добавлен';
 }
 const shortcutFields = ['answer', 'snapshot'];
 let activeChords = {};
@@ -212,9 +219,15 @@ $('#hide-window').onclick = () => window.ghost.hide();
 $('#context').oninput = () => { save('ghost.context', $('#context').value); $('#context-status').textContent = 'Сохранено на этом устройстве'; };
 $('#custom-prompt').oninput = () => save('ghost.prompt', $('#custom-prompt').value);
 $('#settings-open').onclick = () => $('#settings').showModal();
-$('#settings').addEventListener('beforetoggle', event => { if (event.newState === 'open') showShortcutFields(); });
+$('#settings').addEventListener('beforetoggle', event => {
+  if (event.newState !== 'open') return;
+  showShortcutFields();
+  $('#screen-provider').value = screenProvider();
+  updateScreenKeyVisibility();
+});
+$('#screen-provider').onchange = updateScreenKeyVisibility;
 $('#settings-close').onclick = () => $('#settings').close();
-$('#settings').addEventListener('close', () => { $('#api-key').value = ''; $('#gemini-key').value = ''; });
+$('#settings').addEventListener('close', () => { $('#api-key').value = ''; $('#gemini-key').value = ''; $('#groq-screen-key').value = ''; });
 async function saveGeminiKey() {
   const input = $('#provider').value === 'gemini' ? $('#api-key') : $('#gemini-key');
   if (input.value.trim()) { await window.ghost.setKey('gemini', input.value); input.value = ''; }
@@ -237,6 +250,9 @@ $('#settings-form').onsubmit = async event => {
       syncShortcuts(result.shortcuts);
     }
     await saveSettings();
+    const groqScreenKey = $('#groq-screen-key');
+    if (!$('#groq-screen-key-settings').hidden && groqScreenKey.value.trim()) await window.ghost.setKey('groq', groqScreenKey.value);
+    save('ghost.screenProvider', $('#screen-provider').value);
     $('#settings').close();
   } catch (error) { $('#settings-error').textContent = error.message; }
   finally { button.disabled = false; }
@@ -247,6 +263,11 @@ $('#test-key').onclick = async () => {
   try { await saveSettings(); const result = await window.ghost.testKey(model, provider); if (result.error) throw Error(result.error); $('#settings-error').textContent = `Подключение работает · ${(result.elapsedMs / 1000).toFixed(2)} с`; }
   catch (error) { $('#settings-error').textContent = error.message; }
   finally { $('#test-key').disabled = false; }
+};
+$('#forget-groq-screen').onclick = async () => {
+  await window.ghost.setKey('groq', '');
+  $('#groq-screen-key').value = '';
+  await updateStatus();
 };
 $('#forget-key').onclick = async () => { await window.ghost.setKey($('#provider').value, ''); $('#api-key').value = ''; await updateStatus(); };
 $('#forget-gemini').onclick = async () => { await window.ghost.setKey('gemini', ''); $('#gemini-key').value = ''; await updateStatus(); };
@@ -291,10 +312,13 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
     await window.ghostSession?.cancelAnswer();
     question = question.trim() || screenQuestion;
     const request = config(question, heard);
-    if (image) { request.provider = 'gemini'; request.model = request.recognitionModel; }
+    if (image) {
+      request.provider = screenProvider();
+      request.model = request.provider === 'groq' ? groqScreenModel : request.recognitionModel;
+    }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
     $('#answer-question').textContent = title || question;
-    if (image) $('#timing').textContent = 'Gemini проверяет задачи на снимке…';
+    if (image) $('#timing').textContent = `${request.provider === 'groq' ? 'Qwen' : 'Gemini'} проверяет задачи на снимке…`;
     const result = await window.ghost.generate({ ...request, question, ...(image ? { image } : {}) });
     if (result.error) throw Error(result.error);
     presentResult(result, title || question, false, title ? title + '\n' + question : question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
@@ -314,5 +338,5 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
 $('#question-form').onsubmit = event => { event.preventDefault(); ask($('#question').value); };
 $('#question').onkeydown = event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $('#question-form').requestSubmit(); } };
 $('#import-context').onclick = async () => { try { const result = await window.ghost.importContext(); if (result.error) throw Error(result.error); if (result.text !== undefined) { $('#context').value = result.text; $('#context').dispatchEvent(new Event('input')); } } catch (error) { showError(error.message); } };
-window.copilot = { config, presentResult, receiveQuestion, followLive, beginSpeechAnswer, speechDelta, endSpeechAnswer, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
+window.copilot = { config, screenProvider, presentResult, receiveQuestion, followLive, beginSpeechAnswer, speechDelta, endSpeechAnswer, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
 renderHistory(); updateStatus(); updatePrivacy();

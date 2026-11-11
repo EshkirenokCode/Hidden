@@ -1,15 +1,29 @@
 module.exports = async (url, options) => {
   if (url === 'https://api.groq.com/openai/v1/chat/completions') {
     const body = JSON.parse(options.body);
-    if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] ||
-        body.model !== 'openai/gpt-oss-20b' || !body.stream || body.reasoning_effort !== 'low' ||
-        body.include_reasoning !== false || body.messages.some(message => typeof message.content !== 'string')) throw Error('Wrong Groq routing');
+    if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] || !body.stream) throw Error('Wrong Groq routing');
     const input = body.messages.at(-1).content;
-    const question = input.split('Вопрос:\n').at(-1);
-    if (question === 'А для HTTPS?' && !(body.messages.at(-2)?.role === 'assistant' && body.messages.at(-2).content === 'Groq smoke response: Что такое DNS? Как работает TCP?' && body.messages.at(-3)?.content === 'Что такое DNS? Как работает TCP?')) {
-      throw Error('Follow-up request is missing the previous manual answer');
+    let answer;
+    if (body.model === 'qwen/qwen3.8-27b') {
+      if (!Array.isArray(input) || input.length !== 2 || input[0]?.type !== 'text' ||
+          input[1]?.type !== 'image_url' || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(input[1].image_url.url) ||
+          body.reasoning_effort !== 'medium' || body.reasoning_format !== 'hidden' || body.include_reasoning !== undefined) throw Error('Wrong Qwen screen request');
+      if (input[0].text.endsWith('Уточни пункт 4')) {
+        if (!body.messages.some(message => message.role === 'assistant' && message.content === 'Qwen screen response')) throw Error('Qwen lost screen conversation');
+        answer = 'Qwen screen follow-up';
+      } else {
+        if (!input[0].text.includes('Ответь на каждый')) throw Error('Qwen screen prompt ignored multiple items');
+        answer = 'Qwen screen response';
+      }
+    } else {
+      if (body.model !== 'openai/gpt-oss-20b' || body.reasoning_effort !== 'low' ||
+          body.include_reasoning !== false || body.messages.some(message => typeof message.content !== 'string')) throw Error('Wrong Groq text request');
+      const question = input.split('Вопрос:\n').at(-1);
+      if (question === 'А для HTTPS?' && !(body.messages.at(-2)?.role === 'assistant' && body.messages.at(-2).content === 'Groq smoke response: Что такое DNS? Как работает TCP?' && body.messages.at(-3)?.content === 'Что такое DNS? Как работает TCP?')) {
+        throw Error('Follow-up request is missing the previous manual answer');
+      }
+      answer = 'Groq smoke response: ' + question;
     }
-    const answer = 'Groq smoke response: ' + question;
     return { ok: true, body: (async function* () {
       const event = (delta, finish_reason = null) => 'data: ' + JSON.stringify({ choices: [{ delta, finish_reason }] }) + '\r\n\r\n';
       const bytes = new TextEncoder().encode(event({ reasoning: 'must not show' }) + event({ content: answer }));

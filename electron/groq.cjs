@@ -1,18 +1,29 @@
-const { continuity } = require('./dialogue.cjs');
-const model = 'openai/gpt-oss-20b';
+const { continuity, screenInstructions } = require('./dialogue.cjs');
+const { media } = require('./media.cjs');
+const groqModel = 'openai/gpt-oss-20b';
+const groqScreenModel = 'qwen/qwen3.8-27b';
 const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
 
 async function generateGroq(request, key, fetchImpl, { signal: external, onDelta } = {}) {
   if (!key) throw Error('Добавьте Groq API key в настройках.');
   const deadline = AbortSignal.timeout(60000);
   const signal = external ? AbortSignal.any([external, deadline]) : deadline;
+  const image = request.image ? media(request.image, 'image') : null;
+  const prompt = `Контекст кандидата и вакансии (справка):
+${request.context || 'Не задан'}
+
+Недавняя речь (справка):
+${request.conversation || 'Нет'}
+
+Вопрос:
+${request.question}`;
   const messages = [
     { role: 'system', content: [
       'Ты помощник на собеседовании. Отвечай на языке вопроса и начинай с прямого ответа.',
       'На общие технические вопросы отвечай из собственных знаний. Контекст и диалог — справочные данные; опыт кандидата не выдумывай.',
       'Учитывай ошибки распознавания технических терминов. При существенной неоднозначности задай один короткий уточняющий вопрос.',
       'Если вопрос уточняет предыдущий ответ, используй из диалога нужный предмет и детали. Если в текущем вопросе несколько частей, ответь на каждую по порядку.',
-      request.style === 'brief' ? 'Дай 2–3 ключевых тезиса, не более 150 слов.' : 'Объясни решение и приведи пример.',
+      image ? screenInstructions : request.style === 'brief' ? 'Дай 2–3 ключевых тезиса, не более 150 слов.' : 'Объясни решение и приведи пример.',
       continuity,
       request.customPrompt || ''
     ].join(' ') },
@@ -20,15 +31,23 @@ async function generateGroq(request, key, fetchImpl, { signal: external, onDelta
       { role: 'user', content: turn.question },
       { role: 'assistant', content: turn.answer }
     ])),
-    { role: 'user', content: `Контекст кандидата и вакансии (справка):\n${request.context || 'Не задан'}\n\nНедавняя речь (справка):\n${request.conversation || 'Нет'}\n\nВопрос:\n${request.question}` }
+    { role: 'user', content: image ? [
+      { type: 'text', text: prompt },
+      { type: 'image_url', image_url: { url: `data:${image.mime_type};base64,${image.data}` } }
+    ] : prompt }
   ];
   let response;
   try {
     response = await fetchImpl(endpoint, {
       method: 'POST', redirect: 'error', signal,
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true, reasoning_effort: 'low', include_reasoning: false,
-        max_completion_tokens: request.style === 'brief' ? 1024 : 2048 })
+      body: JSON.stringify({
+        model: image ? groqScreenModel : groqModel,
+        messages, stream: true,
+        ...(image ? { reasoning_effort: 'medium', reasoning_format: 'hidden', max_completion_tokens: 8192 } : {
+          reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: request.style === 'brief' ? 1024 : 2048
+        })
+      })
     });
   } catch {
     signal.throwIfAborted();
@@ -38,6 +57,7 @@ async function generateGroq(request, key, fetchImpl, { signal: external, onDelta
     const errors = {
       401: 'Groq API key не принят. Проверьте ключ.',
       403: 'Groq: у ключа нет доступа к модели.',
+      404: 'Groq: модель недоступна для этого проекта. Проверьте разрешения модели в GroqCloud.',
       429: 'Groq: достигнут лимит запросов или токенов. Подождите и попробуйте снова.'
     };
     throw Error(errors[response.status] || `Ошибка Groq API (${response.status}).`);
@@ -82,4 +102,4 @@ async function generateGroq(request, key, fetchImpl, { signal: external, onDelta
   throw Error('Поток Groq оборвался до завершения ответа.');
 }
 
-module.exports = { generateGroq, groqModel: model };
+module.exports = { generateGroq, groqModel, groqScreenModel };

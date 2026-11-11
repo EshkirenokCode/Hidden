@@ -363,7 +363,11 @@ async function snapshot({ reuse = false, analyze = true } = {}) {
   capturingScreen = true;
   const captureEpoch = epoch;
   try {
-    if (!(await window.ghost.keyStatus('gemini'))) throw Error('Добавьте ключ Gemini для анализа экрана.');
+    const provider = ui.screenProvider();
+    if (analyze && !(await window.ghost.keyStatus(provider))) {
+      $('#settings').showModal();
+      throw Error(`Добавьте ключ ${provider === 'groq' ? 'Groq' : 'Gemini'} для анализа экрана.`);
+    }
     const source = reuse && selectedScreen ? selectedScreen : await chooseSource(); if (!source) return;
     if (captureEpoch !== epoch || $('#settings').open) return;
     const result = await window.ghost.snapshot(source.id); if (result.error) { selectedScreen = null; throw Error(result.error); }

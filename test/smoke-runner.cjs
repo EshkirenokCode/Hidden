@@ -50,6 +50,33 @@ module.exports = async ({ app, win, toggleWindow }) => {
       document.querySelector('#question-form').requestSubmit();
       await waitFor(() => document.querySelector('#answer').textContent.includes('Gemini follow-up with screenshot') && !document.querySelector('#submit').disabled);
       document.querySelector('#remove-snapshot').click();
+      const selectScreenProvider = async (value, key = '') => {
+        document.querySelector('#settings-open').click();
+        const field = document.querySelector('#screen-provider');
+        field.value = value;
+        field.dispatchEvent(new Event('change'));
+        if (key) {
+          if (document.querySelector('#groq-screen-key-settings').hidden) throw Error('Screen settings did not expose the Groq key');
+          document.querySelector('#groq-screen-key').value = key;
+        }
+        document.querySelector('#settings-form').requestSubmit();
+        await waitFor(() => !document.querySelector('#settings').open);
+      };
+      const captureWithModel = async (answer, model) => {
+        document.querySelector('#capture-screen').click();
+        await waitFor(() => document.querySelector('#source-picker').open && !!document.querySelector('#sources .source-item'));
+        document.querySelector('#sources .source-item').click();
+        await waitFor(() => document.querySelector('#answer').textContent.includes(answer) &&
+          document.querySelector('#timing').textContent.includes(model) && !document.querySelector('#submit').disabled);
+      };
+      await selectScreenProvider('groq', 'groq-smoke-not-a-real-key');
+      await captureWithModel('Qwen screen response', 'qwen/qwen3.8-27b');
+      document.querySelector('#question').value = 'Уточни пункт 4';
+      document.querySelector('#question-form').requestSubmit();
+      await waitFor(() => document.querySelector('#answer').textContent.includes('Qwen screen follow-up') && !document.querySelector('#submit').disabled);
+      await selectScreenProvider('gemini');
+      await captureWithModel('Gemini screen response', 'gemini-3.8-flash');
+      document.querySelector('#remove-snapshot').click();
       const invalid = await window.ghost.saveShortcuts({answer:'CommandOrControl+Shift+H',snapshot:'CommandOrControl+Shift+S'});
       if (!invalid.error) throw Error('Reserved shortcut accepted');
       document.querySelector('#settings-open').click();
