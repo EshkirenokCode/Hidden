@@ -7,7 +7,7 @@ const path = require('node:path');
     dir: path.resolve(__dirname, '..'), name: 'Hidden', executableName: 'Hidden',
     appBundleId: 'com.eshkirenok.hidden', platform: 'darwin', arch: process.arch,
     out: path.resolve(__dirname, '../dist'), overwrite: true, asar: true, prune: true,
-    extraResource: [path.resolve(__dirname, '../native/bin/hidden-system-audio')],
+    extraResource: ['hidden-system-audio', 'hidden-screen-text'].map(name => path.resolve(__dirname, '../native/bin', name)),
     osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false,
       optionsForFile: () => ({ hardenedRuntime: false }) },
     ignore: [/^\/(artifacts|dist|docs|tools|test|scripts|native|\.git)(\/|$)/, /^\/\.env(?:\.|$)/, /\.(key|pem|p12)$/],

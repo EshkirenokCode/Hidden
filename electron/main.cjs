@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, session, globalShortcut, desktopCapturer, nativeImage, Menu, Tray, dialog, systemPreferences, screen } = require('electron');
 const { fitOverlay } = require('./overlay-layout.cjs');
 const { allowMediaRequest } = require('./media-policy.cjs');
+const { recognizeScreenText } = require('./screen-text.cjs');
 const { SystemAudio } = require('./system-audio.cjs');
 const { LiveTranscriber } = require('./live-transcriber.cjs');
 const { generateVoiceAnswer } = require('./voice-answer.cjs');
@@ -85,6 +86,7 @@ function changeShortcuts(request) {
   publishWindowState();
   return windowState();
 }
+const nativeScreenTextPath = path.join(app.isPackaged ? process.resourcesPath : path.join(__dirname, '../native/bin'), 'hidden-screen-text');
 const nativeAudioPath = app.isPackaged ? path.join(process.resourcesPath, 'hidden-system-audio') : path.join(__dirname, '../native/bin/hidden-system-audio');
 let nativeAudio;
 let liveTranscriber;
@@ -327,16 +329,19 @@ app.whenReady().then(async () => {
   ipcMain.handle('media:select', (event, id) => {
     trusted(event); if (!sourceIds.has(id)) throw Error('Выберите доступное окно.'); displaySource = id;
   });
-  ipcMain.handle('media:snapshot', async (event, id) => {
+  ipcMain.handle('media:snapshot', async (event, id, readText) => {
     trusted(event);
     try {
       if (!sourceIds.has(id)) throw Error('Сначала выберите окно.');
-      const source = (await sources({ width: 2560, height: 1600 })).find(s => s.id === id);
+      const source = (await sources({ width: 4096, height: 2560 })).find(s => s.id === id);
       if (!source || source.thumbnail.isEmpty()) throw Error('Окно недоступно. Проверьте разрешение записи экрана.');
       const png = source.thumbnail.toPNG();
+      const screenText = readText === true
+        ? smoke ? 'OCR smoke task: What is 2 + 2?' : await recognizeScreenText(nativeScreenTextPath, png)
+        : undefined;
       const lossless = png.length <= 6_000_000;
       const data = lossless ? png : source.thumbnail.toJPEG(94);
-      return { image: { data: data.toString('base64'), mimeType: lossless ? 'image/png' : 'image/jpeg' }, name: source.name };
+      return { image: { data: data.toString('base64'), mimeType: lossless ? 'image/png' : 'image/jpeg' }, name: source.name, screenText };
     } catch (error) { return fail(error); }
   });
   ipcMain.handle('context:import', async event => {

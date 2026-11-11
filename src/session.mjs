@@ -370,12 +370,15 @@ async function snapshot({ reuse = false, analyze = true } = {}) {
     }
     const source = reuse && selectedScreen ? selectedScreen : await chooseSource(); if (!source) return;
     if (captureEpoch !== epoch || $('#settings').open) return;
-    const result = await window.ghost.snapshot(source.id); if (result.error) { selectedScreen = null; throw Error(result.error); }
-    if (captureEpoch !== epoch || $('#settings').open) return;
+    const mode = ui.screenMode();
+    const result = await window.ghost.snapshot(source.id, mode === 'groq');
+    if (result.error) { selectedScreen = null; throw Error(result.error); }
+    if (captureEpoch !== epoch || $('#settings').open || mode !== ui.screenMode()) return;
     selectedScreen = source;
-    ui.setImage(result.image, result.name);
+    const image = { ...result.image, screenText: result.screenText };
+    ui.setImage(image, result.name);
     if (analyze) {
-      await ui.ask('', { image: result.image, preserveDraft: true, title: 'Задача с экрана · ' + result.name });
+      await ui.ask('', { image, preserveDraft: true, title: 'Задача с экрана · ' + result.name });
     } else {
       $('#snapshot-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }

@@ -69,7 +69,12 @@ module.exports = async ({ app, win, toggleWindow }) => {
         await waitFor(() => document.querySelector('#answer').textContent.includes(answer) &&
           document.querySelector('#timing').textContent.includes(model) && !document.querySelector('#submit').disabled);
       };
-      await selectScreenProvider('groq', 'groq-smoke-not-a-real-key');
+      if (navigator.platform.includes('Mac')) {
+        await selectScreenProvider('groq', 'groq-smoke-not-a-real-key');
+        await captureWithModel('GPT-OSS OCR response', 'openai/gpt-oss-120b');
+        if (!document.querySelector('#snapshot-text').value.includes('What is 2 + 2?')) throw Error('Recognized text preview missing');
+      }
+      await selectScreenProvider('qwen', 'groq-smoke-not-a-real-key');
       await captureWithModel('Qwen screen response', 'qwen/qwen3.8-27b');
       document.querySelector('#question').value = 'Уточни пункт 4';
       document.querySelector('#question-form').requestSubmit();

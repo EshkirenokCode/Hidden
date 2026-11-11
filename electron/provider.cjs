@@ -1,12 +1,17 @@
 const { generateGemini } = require('./gemini.cjs');
-const { generateGroq, groqModel, groqScreenModel } = require('./groq.cjs');
+const { generateGroq, groqModel, groqScreenModel, groqScreenTextModel } = require('./groq.cjs');
 const { continuity, formatDialogue } = require('./dialogue.cjs');
+const { maxScreenText } = require('./screen-text.cjs');
 function validateRequest(request) {
   if (request?.provider !== undefined && !['openai', 'gemini', 'groq'].includes(request.provider)) throw new Error('Неизвестный провайдер.');
   if (!request || typeof request.question !== 'string' || !request.question.trim()) throw new Error('Введите вопрос.');
   if (request.question.length > 12000) throw new Error('Вопрос слишком длинный (до 12 000 символов).');
   if (typeof request.context !== 'string' || request.context.length > 30000) throw new Error('Контекст должен быть текстом до 30 000 символов.');
-  if (request.provider === 'groq' ? request.model !== (request.image ? groqScreenModel : groqModel) : typeof request.model !== 'string' || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model)) throw new Error('Укажите корректное имя модели.');
+  const hasScreenText = request.screenText !== undefined;
+  if (hasScreenText && (request.provider !== 'groq' || request.image || typeof request.screenText !== 'string' ||
+      !request.screenText.trim() || request.screenText.length > maxScreenText)) throw Error('Некорректный текст снимка.');
+  const expectedGroqModel = request.image ? groqScreenModel : hasScreenText ? groqScreenTextModel : groqModel;
+  if (request.provider === 'groq' ? request.model !== expectedGroqModel : typeof request.model !== 'string' || !/^[a-zA-Z0-9._:-]{1,100}$/.test(request.model)) throw new Error('Укажите корректное имя модели.');
   if (!['brief', 'detailed'].includes(request.style)) throw new Error('Неизвестный формат ответа.');
   if (request.conversation !== undefined && (typeof request.conversation !== 'string' || request.conversation.length > 12000)) throw Error('Conversation is too long.');
   if (request.dialogue !== undefined && (!Array.isArray(request.dialogue) || request.dialogue.length > 6 ||

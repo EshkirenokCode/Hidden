@@ -86,9 +86,15 @@ $('#recognition-mode').onchange = () => save('hidden.recognitionMode', $('#recog
 const providerLabels = { gemini: 'Gemini', groq: 'Groq', openai: 'OpenAI' };
 const groqModel = 'openai/gpt-oss-20b';
 const groqScreenModel = 'qwen/qwen3.8-27b';
-const screenProvider = () => read('ghost.screenProvider', 'gemini') === 'groq' ? 'groq' : 'gemini';
+const screenMode = () => {
+  const saved = read('ghost.screenProvider', 'gemini');
+  if (saved === 'qwen') return 'qwen';
+  if (saved === 'groq') return navigator.platform.includes('Mac') ? 'groq' : 'qwen';
+  return 'gemini';
+};
+const screenProvider = () => screenMode() === 'gemini' ? 'gemini' : 'groq';
 function updateScreenKeyVisibility() {
-  $('#groq-screen-key-settings').hidden = $('#provider').value === 'groq' || $('#screen-provider').value !== 'groq';
+  $('#groq-screen-key-settings').hidden = $('#provider').value === 'groq' || $('#screen-provider').value === 'gemini';
 }
 const geminiModel = () => String($('#provider').value === 'gemini' ? $('#model').value.trim() : read('ghost.model.gemini', 'gemini-3.5-flash-lite')) || 'gemini-3.5-flash-lite';
 $('#provider').value = ['openai', 'gemini', 'groq'].includes(read('ghost.provider', 'gemini')) ? read('ghost.provider', 'gemini') : 'gemini';
@@ -222,7 +228,8 @@ $('#settings-open').onclick = () => $('#settings').showModal();
 $('#settings').addEventListener('beforetoggle', event => {
   if (event.newState !== 'open') return;
   showShortcutFields();
-  $('#screen-provider').value = screenProvider();
+  $('#screen-provider').value = screenMode();
+  $('#screen-provider').querySelector('[value=groq]').disabled = !navigator.platform.includes('Mac');
   updateScreenKeyVisibility();
 });
 $('#screen-provider').onchange = updateScreenKeyVisibility;
@@ -252,6 +259,7 @@ $('#settings-form').onsubmit = async event => {
     await saveSettings();
     const groqScreenKey = $('#groq-screen-key');
     if (!$('#groq-screen-key-settings').hidden && groqScreenKey.value.trim()) await window.ghost.setKey('groq', groqScreenKey.value);
+    if (screenMode() !== $('#screen-provider').value) $('#remove-snapshot').click();
     save('ghost.screenProvider', $('#screen-provider').value);
     $('#settings').close();
   } catch (error) { $('#settings-error').textContent = error.message; }
@@ -300,7 +308,17 @@ window.ghost.onDelta(({ text }) => {
   }, 40);
 });
 $('#cancel-answer').onclick = () => window.ghost.cancel();
-$('#remove-snapshot').onclick = () => { pendingImage = null; $('#snapshot-preview').hidden = true; $('#snapshot-image').removeAttribute('src'); };
+$('#remove-snapshot').onclick = () => {
+  pendingImage = null;
+  $('#snapshot-preview').hidden = true;
+  $('#snapshot-image').removeAttribute('src');
+  $('#snapshot-text-details').hidden = true;
+  $('#snapshot-text-details').open = false;
+  $('#snapshot-text').value = '';
+};
+$('#snapshot-text').oninput = () => {
+  if (pendingImage) pendingImage.screenText = $('#snapshot-text').value;
+};
 const screenQuestion = 'Найди все читаемые вопросы и задания на снимке. Ответь на каждый в исходном порядке, пронумеруй ответы и кратко повтори формулировку каждого вопроса. Если часть снимка не читается, укажи, какие пункты не удалось разобрать. Для задачи по программированию объясни решение, при необходимости приведи код и сложность. Если вопроса нет или текст не читается, скажи об этом.';
 async function ask(question, { image = pendingImage, preserveDraft = false, title, heard = false } = {}) {
   if (busy) return;
@@ -313,13 +331,21 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
     question = question.trim() || screenQuestion;
     const request = config(question, heard);
     if (image) {
+      const mode = screenMode();
       request.provider = screenProvider();
-      request.model = request.provider === 'groq' ? groqScreenModel : request.recognitionModel;
+      if (mode === 'groq') {
+        if (!image.screenText?.trim()) throw Error('Добавьте текст в поле «Распознанный текст» или сделайте новый снимок.');
+        request.model = 'openai/gpt-oss-120b';
+        request.screenText = image.screenText;
+      } else {
+        request.model = mode === 'qwen' ? groqScreenModel : request.recognitionModel;
+        request.image = { data: image.data, mimeType: image.mimeType };
+      }
     }
     if (!request.model || !(await window.ghost.keyStatus(request.provider))) { $('#settings').showModal(); return; }
     $('#answer-question').textContent = title || question;
-    if (image) $('#timing').textContent = `${request.provider === 'groq' ? 'Qwen' : 'Gemini'} проверяет задачи на снимке…`;
-    const result = await window.ghost.generate({ ...request, question, ...(image ? { image } : {}) });
+    if (image) $('#timing').textContent = `${request.screenText ? 'GPT-OSS 120B' : request.provider === 'groq' ? 'Qwen' : 'Gemini'} отвечает…`;
+    const result = await window.ghost.generate({ ...request, question });
     if (result.error) throw Error(result.error);
     presentResult(result, title || question, false, title ? title + '\n' + question : question); $('#connection').textContent = `${result.provider} · запрос выполнен`;
     if (!preserveDraft && $('#question').value === submittedDraft && submittedDraft.trim() === question) {
@@ -338,5 +364,17 @@ async function ask(question, { image = pendingImage, preserveDraft = false, titl
 $('#question-form').onsubmit = event => { event.preventDefault(); ask($('#question').value); };
 $('#question').onkeydown = event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $('#question-form').requestSubmit(); } };
 $('#import-context').onclick = async () => { try { const result = await window.ghost.importContext(); if (result.error) throw Error(result.error); if (result.text !== undefined) { $('#context').value = result.text; $('#context').dispatchEvent(new Event('input')); } } catch (error) { showError(error.message); } };
-window.copilot = { config, screenProvider, presentResult, receiveQuestion, followLive, beginSpeechAnswer, speechDelta, endSpeechAnswer, showError, ask, compact, busy: () => busy, setImage(image, name) { pendingImage = image; $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`; $('#snapshot-name').textContent = name; $('#snapshot-preview').hidden = false; } };
+window.copilot = {
+  config, screenMode, screenProvider, presentResult, receiveQuestion, followLive, beginSpeechAnswer,
+  speechDelta, endSpeechAnswer, showError, ask, compact, busy: () => busy,
+  setImage(image, name) {
+    pendingImage = image;
+    $('#snapshot-image').src = `data:${image.mimeType};base64,${image.data}`;
+    $('#snapshot-name').textContent = name;
+    $('#snapshot-preview').hidden = false;
+    $('#snapshot-text-details').hidden = !image.screenText;
+    $('#snapshot-text-details').open = false;
+    $('#snapshot-text').value = image.screenText || '';
+  }
+};
 renderHistory(); updateStatus(); updatePrivacy();

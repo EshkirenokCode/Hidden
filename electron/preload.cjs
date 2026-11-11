@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('ghost', {
   onNativeAudioError: callback => listen('audio:native-error', callback),
   sources: () => ipcRenderer.invoke('media:sources'),
   selectSource: id => ipcRenderer.invoke('media:select', id),
-  snapshot: id => ipcRenderer.invoke('media:snapshot', id),
+  snapshot: (id, readText) => ipcRenderer.invoke('media:snapshot', id, readText),
   importContext: () => ipcRenderer.invoke('context:import'),
   onAnswerLast: callback => listen('session:answer-last', callback),
   onSnapshot: callback => listen('session:snapshot', callback),

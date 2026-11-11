@@ -4,7 +4,12 @@ module.exports = async (url, options) => {
     if (options.headers.Authorization !== 'Bearer groq-smoke-not-a-real-key' || options.headers['x-goog-api-key'] || !body.stream) throw Error('Wrong Groq routing');
     const input = body.messages.at(-1).content;
     let answer;
-    if (body.model === 'qwen/qwen3.8-27b') {
+    if (body.model === 'openai/gpt-oss-120b') {
+      if (typeof input !== 'string' || !input.includes('OCR smoke task: What is 2 + 2?') ||
+          body.messages.some(message => typeof message.content !== 'string') ||
+          body.reasoning_effort !== 'medium' || body.include_reasoning !== false) throw Error('Wrong OCR routing');
+      answer = 'GPT-OSS OCR response';
+    } else if (body.model === 'qwen/qwen3.8-27b') {
       if (!Array.isArray(input) || input.length !== 2 || input[0]?.type !== 'text' ||
           input[1]?.type !== 'image_url' || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(input[1].image_url.url) ||
           body.reasoning_effort !== 'medium' || body.reasoning_format !== 'hidden' || body.include_reasoning !== undefined) throw Error('Wrong Qwen screen request');

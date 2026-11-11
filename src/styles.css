@@ -29,3 +29,5 @@ body.compact .answer-mode{padding:3px 6px;font-size:10px}
 #answer table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:.65em 0}
 #answer th,#answer td{padding:.25em .55em;border:1px solid #42484c}
 #answer .answer-link{text-decoration:underline}
+
+#snapshot-text{max-height:240px;font-family:monospace}
