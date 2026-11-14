@@ -33,6 +33,8 @@ let mainWindow, shortcutRegistered = false, mediaArmed = false, displaySource = 
 let lastCaptureDenial = '';
 const nativePicker = process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 15 && !smoke;
 let sourceIds = new Set();
+const snapshotSourceIds = new Set();
+let smokeOCRRequests = 0;
 let normalBounds;
 let compactPinned = false;
 let clickThrough = false;
@@ -41,11 +43,14 @@ const shortcutActions = {
   answer: () => mainWindow?.webContents.send('session:answer-last'),
   snapshot: () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (!mainWindow.isVisible()) mainWindow.show();
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
     mainWindow.webContents.send('session:snapshot');
   }
 };
-const customDefaults = { answer: 'CommandOrControl+Shift+Space', snapshot: 'CommandOrControl+Shift+S' };
+const customDefaults = { answer: 'CommandOrControl+Shift+Space', snapshot: 'CommandOrControl+Shift+B' };
 const shortcutFile = () => path.join(app.getPath('userData'), 'shortcuts.json');
 function validChord(chord) {
   return typeof chord === 'string' &&
@@ -351,10 +356,18 @@ app.whenReady().then(async () => {
     if (mediaArmed) { mainWindow.show(); mainWindow.focus(); }
     else { nativeAudio?.stop(); stopSpeech(); displaySource = null; controllers.get('audio')?.abort(); }
   });
-  ipcMain.handle('media:sources', async event => {
+  ipcMain.handle('media:sources', async (event, forSnapshot) => {
     trusted(event);
-    try { const list = await sources(); sourceIds = new Set(list.map(s => s.id)); return { sources: list.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL() })) }; }
-    catch { return { error: 'Не удалось получить окна. Разрешите запись экрана для Electron или приложения, из которого он запущен, в настройках macOS.' }; }
+    try {
+      const list = await sources();
+      if (forSnapshot === true) {
+        snapshotSourceIds.clear();
+        for (const source of list) snapshotSourceIds.add(source.id);
+      } else {
+        sourceIds = new Set(list.map(source => source.id));
+      }
+      return { sources: list.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL() })) };
+    } catch { return { error: 'Не удалось получить окна. Проверьте разрешение записи экрана для Hidden в настройках ОС.' }; }
   });
   ipcMain.handle('media:select', (event, id) => {
     trusted(event); if (!sourceIds.has(id)) throw Error('Выберите доступное окно.'); displaySource = id;
@@ -362,9 +375,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('media:snapshot', async (event, id, readText) => {
     trusted(event);
     try {
-      if (!sourceIds.has(id)) throw Error('Сначала выберите окно.');
+      if (!snapshotSourceIds.has(id)) return { error: 'Сначала выберите окно.', sourceUnavailable: true };
       const source = (await sources({ width: 4096, height: 2560 })).find(s => s.id === id);
-      if (!source || source.thumbnail.isEmpty()) throw Error('Окно недоступно. Проверьте разрешение записи экрана.');
+      if (!source) return { error: 'Окно больше недоступно. Выберите другой источник.', sourceUnavailable: true };
+      if (source.thumbnail.isEmpty()) throw Error('Не удалось получить снимок. Проверьте разрешение записи экрана.');
+      if (smoke && readText && ++smokeOCRRequests === 1) return { error: 'Тестовый сбой OCR' };
       const png = source.thumbnail.toPNG();
       const screenText = readText === true
         ? smoke ? 'OCR smoke task: What is 2 + 2?' : await recognizeScreenText(nativeScreenTextPath, png)

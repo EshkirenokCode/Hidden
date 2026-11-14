@@ -194,7 +194,7 @@ for (const name of shortcutFields) {
 }
 $('#shortcut-defaults').onclick = () => {
   $('#shortcut-answer').value = 'CommandOrControl+Shift+Space';
-  $('#shortcut-snapshot').value = 'CommandOrControl+Shift+S';
+  $('#shortcut-snapshot').value = 'CommandOrControl+Shift+B';
 };
 function syncShortcuts(shortcuts) {
   if (!shortcuts?.answer || !shortcuts.snapshot) return;
@@ -202,6 +202,7 @@ function syncShortcuts(shortcuts) {
   const label = name => shortcuts[name].registered ? ' · ' + shortcuts[name].chord.replace('CommandOrControl', navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl') : '';
   $('#answer-last').textContent = 'Ответить на последний' + label('answer');
   $('#answer-heard').title = 'Ответить на услышанное' + label('answer');
+  $('#capture-screen').textContent = '▣ Ответ с экрана' + label('snapshot');
   $('#compact-snapshot').title = 'Ответ с экрана' + label('snapshot');
   const missing = Object.values(shortcuts).filter(x => !x.registered).map(x => x.chord.replace('CommandOrControl', 'Cmd/Ctrl'));
   $('#shortcut-warning').hidden = !missing.length;

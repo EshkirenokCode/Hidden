@@ -62,26 +62,34 @@ module.exports = async ({ app, win, toggleWindow }) => {
         document.querySelector('#settings-form').requestSubmit();
         await waitFor(() => !document.querySelector('#settings').open);
       };
-      const captureWithModel = async (answer, model) => {
+      const answerFromScreen = async (answer, model) => {
         document.querySelector('#capture-screen').click();
-        await waitFor(() => document.querySelector('#source-picker').open && !!document.querySelector('#sources .source-item'));
-        document.querySelector('#sources .source-item').click();
+        if (document.querySelector('#source-picker').open) throw Error('Screen source was lost');
         await waitFor(() => document.querySelector('#answer').textContent.includes(answer) &&
           document.querySelector('#timing').textContent.includes(model) && !document.querySelector('#submit').disabled);
       };
+      const screenShortcut = (await window.ghost.privacyStatus()).shortcuts.snapshot;
+      if (screenShortcut.chord !== 'CommandOrControl+Shift+B' || !screenShortcut.registered ||
+          !document.querySelector('#capture-screen').textContent.includes('Shift+B')) throw Error('Screen shortcut missing');
       if (navigator.platform.includes('Mac')) {
         await selectScreenProvider('groq', 'groq-smoke-not-a-real-key');
-        await captureWithModel('GPT-OSS OCR response', 'openai/gpt-oss-120b');
+        document.querySelector('#capture-screen').click();
+        await waitFor(() => document.querySelector('#error').textContent.includes('Тестовый сбой OCR'));
+        if (document.querySelector('#source-picker').open) throw Error('Picker reopened on OCR failure');
+        await answerFromScreen('GPT-OSS OCR response', 'openai/gpt-oss-120b');
         if (!document.querySelector('#snapshot-text').value.includes('What is 2 + 2?')) throw Error('Recognized text preview missing');
       }
       await selectScreenProvider('qwen', 'groq-smoke-not-a-real-key');
-      await captureWithModel('Qwen screen response', 'qwen/qwen3.8-27b');
+      await answerFromScreen('Qwen screen response', 'qwen/qwen3.8-27b');
       document.querySelector('#question').value = 'Уточни пункт 4';
       document.querySelector('#question-form').requestSubmit();
       await waitFor(() => document.querySelector('#answer').textContent.includes('Qwen screen follow-up') && !document.querySelector('#submit').disabled);
       await selectScreenProvider('gemini');
-      await captureWithModel('Gemini screen response', 'gemini-3.8-flash');
+      await answerFromScreen('Gemini screen response', 'gemini-3.8-flash');
       document.querySelector('#remove-snapshot').click();
+      document.querySelector('#change-screen-source').click();
+      await waitFor(() => document.querySelector('#source-picker').open && !!document.querySelector('#sources .source-item'));
+      document.querySelector('#source-close').click();
       const invalid = await window.ghost.saveShortcuts({answer:'CommandOrControl+Shift+H',snapshot:'CommandOrControl+Shift+S'});
       if (!invalid.error) throw Error('Reserved shortcut accepted');
       document.querySelector('#settings-open').click();

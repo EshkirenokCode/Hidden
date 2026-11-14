@@ -253,13 +253,13 @@ function enqueue(buffer) {
   drain();
 }
 let pickResolve;
-async function chooseSource() {
+async function chooseSource(forSnapshot = false) {
   if (pickResolve) return null;
   $('#sources').textContent = 'Получаем окна…'; $('#source-picker').showModal();
   const choice = new Promise(resolve => { pickResolve = resolve; });
   const request = pickResolve;
   try {
-    const result = await window.ghost.sources();
+    const result = await window.ghost.sources(forSnapshot);
     if (pickResolve !== request) return choice;
     if (result.error) throw Error(result.error);
     $('#sources').replaceChildren();
@@ -358,7 +358,7 @@ async function stop() {
   status('Сессия остановлена · аудио больше не передаётся');
 }
 let capturingScreen = false;
-async function snapshot({ reuse = false, analyze = true } = {}) {
+async function snapshot({ choose = false, analyze = true } = {}) {
   if (capturingScreen || ui.busy() || $('#settings').open) return;
   capturingScreen = true;
   const captureEpoch = epoch;
@@ -368,13 +368,20 @@ async function snapshot({ reuse = false, analyze = true } = {}) {
       $('#settings').showModal();
       throw Error(`Добавьте ключ ${provider === 'groq' ? 'Groq' : 'Gemini'} для анализа экрана.`);
     }
-    const source = reuse && selectedScreen ? selectedScreen : await chooseSource(); if (!source) return;
-    if (captureEpoch !== epoch || $('#settings').open) return;
+    const source = !choose && selectedScreen ? selectedScreen : await chooseSource(true);
+    if (!source || captureEpoch !== epoch || $('#settings').open) return;
+    selectedScreen = source;
+    $('#screen-source-name').textContent = source.name;
     const mode = ui.screenMode();
     const result = await window.ghost.snapshot(source.id, mode === 'groq');
-    if (result.error) { selectedScreen = null; throw Error(result.error); }
     if (captureEpoch !== epoch || $('#settings').open || mode !== ui.screenMode()) return;
-    selectedScreen = source;
+    if (result.error) {
+      if (result.sourceUnavailable) {
+        selectedScreen = null;
+        $('#screen-source-name').textContent = '';
+      }
+      throw Error(result.error);
+    }
     const image = { ...result.image, screenText: result.screenText };
     ui.setImage(image, result.name);
     if (analyze) {
@@ -388,8 +395,9 @@ async function snapshot({ reuse = false, analyze = true } = {}) {
 $('#start-session').onclick = () => start(); $('#check-sound').onclick = () => start(true); $('#stop-session').onclick = stop;
 $('#flush-audio').onclick = () => { const emitted = segments?.flush(); if (live && !emitted) { pcmPackets?.flush(); window.ghost.endSpeechTurn(); } };
 $('#capture-screen').onclick = () => snapshot();
+$('#change-screen-source').onclick = () => snapshot({ choose: true, analyze: false });
 $('#preview-screen').onclick = () => snapshot({ analyze: false });
-$('#compact-snapshot').onclick = () => snapshot({ reuse: true });
+$('#compact-snapshot').onclick = () => snapshot();
 function clearManualRequest() {
   clearTimeout(manualRequestTimer);
   manualRequestTimer = undefined;
@@ -419,7 +427,7 @@ function answerLast() {
 $('#answer-last').onclick = answerLast;
 $('#answer-heard').onclick = answerLast;
 $('#clear-transcript').onclick = () => { if (running || processing) { ui.showError('Остановите сессию перед очисткой диалога.'); return; } transcript = []; answeredTurns = []; setLastQuestion(''); $('#transcript').textContent = 'Диалог очищен.'; };
-window.ghost.onAnswerLast(answerLast); window.ghost.onSnapshot(() => snapshot({ reuse: true }));
+window.ghost.onAnswerLast(answerLast); window.ghost.onSnapshot(() => snapshot());
 function cancelAnswer() {
   voiceId++;
   inFlightQuestion = '';

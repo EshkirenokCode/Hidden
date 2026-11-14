@@ -5,13 +5,13 @@ import Vision
 
 typealias Line = (text: String, bounds: CGRect)
 
-func recognize(_ image: CGImage) throws -> [Line] {
+func recognize(_ data: Data) throws -> [Line] {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = false
     let supported = try request.supportedRecognitionLanguages()
     request.recognitionLanguages = ["en-US", "ru-RU"].filter { supported.contains($0) }
-    try VNImageRequestHandler(cgImage: image).perform([request])
+    try VNImageRequestHandler(data: data).perform([request])
     return (request.results ?? []).compactMap { observation in
         guard let candidate = observation.topCandidates(1).first else { return nil }
         return (candidate.string, observation.boundingBox)
@@ -72,6 +72,16 @@ func grayscaleForOCR(_ image: CGImage) -> CGImage {
     return context.makeImage() ?? image
 }
 
+// Materialize the cropped pixels before handing them to Vision.
+func pngData(for image: CGImage) -> Data? {
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)
+        else { return nil }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return data as Data
+}
+
 func focusedLines(in image: CGImage, lines: [Line]) -> [Line] {
     guard let column = contentColumn(in: lines) else { return lines }
     let left = max(0, column.left - 0.012)
@@ -80,7 +90,8 @@ func focusedLines(in image: CGImage, lines: [Line]) -> [Line] {
                       width: (right - left) * CGFloat(image.width), height: CGFloat(image.height)).integral
     let center = lines.filter { $0.bounds.midX >= column.left && $0.bounds.midX <= column.right }
     guard let crop = image.cropping(to: area),
-          let rescanned = try? recognize(grayscaleForOCR(crop)),
+          let pixels = pngData(for: grayscaleForOCR(crop)),
+          let rescanned = try? recognize(pixels),
           rescanned.count >= center.count * 2 / 3 else { return center }
     return rescanned
 }
@@ -111,8 +122,8 @@ do {
     let png = FileHandle.standardInput.readDataToEndOfFile()
     guard let source = CGImageSourceCreateWithData(png as CFData, nil),
           let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { exit(1) }
-    let lines = try recognize(image)
-    let text = format(focusedLines(in: image, lines: lines))
+    let lines = try recognize(png)
+    let text = format(CommandLine.arguments.contains("--whole-image") ? lines : focusedLines(in: image, lines: lines))
     FileHandle.standardOutput.write(Data(text.utf8))
 } catch {
     exit(1)
